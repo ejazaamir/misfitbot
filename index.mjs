@@ -1,5 +1,9 @@
 import "dotenv/config";
-import { Client, GatewayIntentBits } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  AttachmentBuilder,
+} from "discord.js";
 import OpenAI from "openai";
 import fs from "fs";
 import Database from "better-sqlite3";
@@ -13,7 +17,7 @@ const OWNER_ID = "1417834414368362596";
 const IS_RENDER = !!process.env.RENDER;
 const DB_PATH = IS_RENDER ? "/var/data/misfitbot.sqlite" : "./misfitbot.sqlite";
 
-// Ensure /var/data exists on Render (prevents “directory does not exist”)
+// Ensure /var/data exists on Render
 if (IS_RENDER) {
   try {
     fs.mkdirSync("/var/data", { recursive: true });
@@ -26,7 +30,7 @@ const FIXED_MEMORY = fs.existsSync("./fixed_memory.txt")
   : "";
 
 // =====================
-// HELPERS
+// IMAGE HELPERS
 // =====================
 function extractImageUrlsFromMessage(msg) {
   const urls = [];
@@ -46,6 +50,7 @@ function extractImageUrlsFromMessage(msg) {
 
     if (isImage && att.url) urls.push(att.url);
   }
+
   return urls;
 }
 
@@ -84,53 +89,102 @@ client.on("messageCreate", async (message) => {
 
     const isOwner = message.author.id === OWNER_ID;
 
-    // --- Auto reply to "bruh", "bruhh", "bruhhhh" etc (not requiring mention)
-    const text = (message.content || "").toLowerCase().trim();
-    if (/^bruh+h*$/.test(text)) {
+    // =====================
+    // AUTO "BRUH" REPLY
+    // =====================
+    const raw = (message.content || "").toLowerCase().trim();
+    if (/^bruh+h*$/.test(raw)) {
       await message.reply("bruh indeed 😭");
       return;
     }
 
-    // --- Only respond to normal chat when the bot is mentioned
+    // =====================
+    // ONLY RESPOND WHEN MENTIONED
+    // =====================
     if (!message.mentions.has(client.user)) return;
 
-    // Remove bot mention from the user's message
+    // Remove bot mention from message
     const userText = (message.content || "")
       .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
       .trim();
 
-    // --- Fetch replied message (for summarise / context + image analysis)
+    // =====================
+    // FETCH REPLIED MESSAGE (TEXT + IMAGES)
+    // =====================
     let referencedText = "";
     let repliedMsg = null;
 
     if (message.reference?.messageId) {
       try {
-        repliedMsg = await message.channel.messages.fetch(message.reference.messageId);
+        repliedMsg = await message.channel.messages.fetch(
+          message.reference.messageId
+        );
         if (repliedMsg?.content) referencedText = repliedMsg.content.trim();
       } catch (e) {
         console.error("Could not fetch replied message:", e);
       }
     }
 
-    // --- Collect image URLs from the message + replied message
+    // =====================
+    // IMAGE URL COLLECTION
+    // =====================
     let imageUrls = extractImageUrlsFromMessage(message);
     if (repliedMsg) imageUrls = imageUrls.concat(extractImageUrlsFromMessage(repliedMsg));
     imageUrls = imageUrls.slice(0, 3);
 
     // =====================
+    // IMAGE GENERATION COMMAND
+    // =====================
+    // Usage: @MisfitBot img <prompt>
+    const imgMatch = userText.match(/^img\s+(.+)/i);
+    if (imgMatch) {
+      const imgPrompt = imgMatch[1].trim();
+
+      if (!imgPrompt) {
+        await message.reply(
+          "Give me something to generate. Example: `@MisfitBot img cyberpunk cat`"
+        );
+        return;
+      }
+
+      await message.channel.sendTyping();
+
+      const imgResp = await openai.images.generate({
+        model: "gpt-image-1",
+        prompt: imgPrompt,
+        size: "1024x1024",
+      });
+
+      const b64 = imgResp.data?.[0]?.b64_json;
+
+      if (!b64) {
+        await message.reply("I tried, but I didn’t get an image back 😭");
+        return;
+      }
+
+      const buffer = Buffer.from(b64, "base64");
+      const attachment = new AttachmentBuilder(buffer, {
+        name: "misfit.png",
+      });
+
+      await message.reply({
+        content: `Here. Don’t waste it 😌\n**Prompt:** ${imgPrompt}`,
+        files: [attachment],
+      });
+
+      return;
+    }
+
+    // =====================
     // OWNER-ONLY MEMORY COMMANDS
     // =====================
-    // Usage:
-    // @MisfitBot mem set @User <notes>
-    // @MisfitBot mem show @User
-    // @MisfitBot mem forget @User
-
     const setMatch = userText.match(/^mem\s+set\s+<@!?(\d+)>\s+(.+)$/i);
     if (setMatch) {
       if (!isOwner) {
         await message.reply("Nice try. Only Snooty can edit memory 😌");
         return;
       }
+
       const targetId = setMatch[1];
       const notes = setMatch[2].trim();
 
@@ -144,14 +198,18 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    const showMatch = userText.match(/^mem\s+show\s+<@!?(\d+)>$/i);
+    const showMatch = userText.match(/^mem\s+show\s+<@!?(\d+)$/i);
     if (showMatch) {
       if (!isOwner) {
         await message.reply("Only Snooty can view other people’s memory 😌");
         return;
       }
+
       const targetId = showMatch[1];
-      const row = db.prepare(`SELECT notes FROM user_memory WHERE user_id = ?`).get(targetId);
+      const row = db.prepare(
+        `SELECT notes FROM user_memory WHERE user_id = ?`
+      ).get(targetId);
+
       await message.reply(
         row?.notes
           ? `Memory for <@${targetId}>:\n${row.notes}`
@@ -160,20 +218,22 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    const forgetMatch = userText.match(/^mem\s+forget\s+<@!?(\d+)>$/i);
+    const forgetMatch = userText.match(/^mem\s+forget\s+<@!?(\d+)$/i);
     if (forgetMatch) {
       if (!isOwner) {
         await message.reply("Only Snooty can wipe memory 😈");
         return;
       }
+
       const targetId = forgetMatch[1];
       db.prepare(`DELETE FROM user_memory WHERE user_id = ?`).run(targetId);
+
       await message.reply(`Memory wiped for <@${targetId}> 🧽`);
       return;
     }
 
     // =====================
-    // BUILD FINAL USER REQUEST
+    // BUILD FINAL PROMPT
     // =====================
     const prompt = referencedText
       ? `Message being replied to:\n\n${referencedText}\n\nUser request:\n${userText}`
@@ -191,12 +251,12 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // Pull memory for the current asker only
+    // Load memory about the asker
     const askerMemory =
       db.prepare(`SELECT notes FROM user_memory WHERE user_id = ?`)
         .get(message.author.id)?.notes || "";
 
-    // If we have images, send a multimodal message; else normal text
+    // Multimodal message if images exist
     const userMessage =
       imageUrls.length > 0
         ? {
@@ -212,8 +272,10 @@ client.on("messageCreate", async (message) => {
         : { role: "user", content: finalUserText };
 
     // =====================
-    // OPENAI CALL
+    // OPENAI CHAT CALL
     // =====================
+    await message.channel.sendTyping();
+
     const resp = await openai.chat.completions.create({
       model: "gpt-4.1-mini",
       messages: [
@@ -242,7 +304,9 @@ Personality rules:
     });
 
     const reply =
-      resp.choices?.[0]?.message?.content?.trim() || "I couldn’t generate a reply.";
+      resp.choices?.[0]?.message?.content?.trim() ||
+      "I couldn’t generate a reply.";
+
     await message.reply(reply.slice(0, 1900));
   } catch (err) {
     console.error(err);
