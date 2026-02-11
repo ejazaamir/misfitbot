@@ -29,6 +29,7 @@ function extractImageUrlsFromMessage(msg) {
       name.endsWith(".jpeg") ||
       name.endsWith(".webp") ||
       name.endsWith(".gif");
+
     if (isImage && att.url) urls.push(att.url);
   }
   return urls;
@@ -78,6 +79,7 @@ const DB_PATH = process.env.RENDER
   ? "/var/data/misfitbot.sqlite"
   : "./misfitbot.sqlite";
 const db = new Database(DB_PATH);
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS user_memory (
     user_id TEXT PRIMARY KEY,
@@ -93,7 +95,7 @@ const FIXED_MEMORY = fs.existsSync("./fixed_memory.txt")
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages, // reply context tracking
+    GatewayIntentBits.GuildMessages, // reply context tracking + summarize channel
     GatewayIntentBits.MessageContent,
   ],
 });
@@ -119,7 +121,7 @@ function getReplyContext(userId, channelId) {
   return v.messageId;
 }
 
-// ========= Core “AI handlers” =========
+// ========= AI Handlers =========
 async function makeChatReply({ userId, userText, referencedText, imageUrls }) {
   const askerMemory =
     db.prepare(`SELECT notes FROM user_memory WHERE user_id = ?`).get(userId)
@@ -191,7 +193,6 @@ async function transcribeAudioFromUrl(audioUrl) {
 }
 
 async function generateImageFromPrompt(prompt) {
-  // Returns Buffer (png)
   const img = await openai.images.generate({
     model: "gpt-image-1",
     prompt,
@@ -207,18 +208,16 @@ function formatMessageForChannelSummary(m) {
   const content = (m.content || "").trim();
   const parts = [];
 
-  // username: message
   if (content) parts.push(content);
 
   const imgCount = extractImageUrlsFromMessage(m).length;
   const audCount = extractAudioUrlsFromMessage(m).length;
 
-  if (imgCount > 0) parts.push(`[${imgCount} image${imgCount === 1 ? "" : "s"}]`);
+  if (imgCount > 0)
+    parts.push(`[${imgCount} image${imgCount === 1 ? "" : "s"}]`);
   if (audCount > 0) parts.push(`[${audCount} audio]`);
 
-  // If absolutely nothing, skip
   if (parts.length === 0) return "";
-
   return `${m.author.username}: ${parts.join(" ")}`;
 }
 
@@ -232,29 +231,17 @@ async function registerCommands() {
     return;
   }
 
-  // Guild registration = instant updates while testing
-  // Global registration = slower to appear
   const target = guildId ? client.guilds.cache.get(guildId) : null;
 
   const commands = [
-    // ---------- Slash commands ----------
-    {
-      name: "help",
-      description: "Show what MisfitBot can do.",
-      options: [],
-    },
+    // Slash
+    { name: "help", description: "Show what MisfitBot can do.", options: [] },
     {
       name: "ask",
       description:
         "Ask MisfitBot anything (uses reply context or a message link).",
       options: [
-        // REQUIRED options must come FIRST
-        {
-          name: "prompt",
-          description: "What do you want to ask?",
-          type: 3, // STRING
-          required: true,
-        },
+        { name: "prompt", description: "What do you want to ask?", type: 3, required: true },
         {
           name: "message",
           description:
@@ -267,14 +254,7 @@ async function registerCommands() {
     {
       name: "imagine",
       description: "Generate an image from a prompt.",
-      options: [
-        {
-          name: "prompt",
-          description: "Describe the image you want.",
-          type: 3, // STRING
-          required: true,
-        },
-      ],
+      options: [{ name: "prompt", description: "Describe the image you want.", type: 3, required: true }],
     },
     {
       name: "summarize",
@@ -314,12 +294,7 @@ async function registerCommands() {
           type: 3,
           required: false,
         },
-        {
-          name: "prompt",
-          description: "What should I look for? (optional)",
-          type: 3,
-          required: false,
-        },
+        { name: "prompt", description: "What should I look for? (optional)", type: 3, required: false },
       ],
     },
     {
@@ -333,30 +308,18 @@ async function registerCommands() {
           type: 3,
           required: false,
         },
-        {
-          name: "explain",
-          description: "Also explain what it means",
-          type: 5, // BOOLEAN
-          required: false,
-        },
+        { name: "explain", description: "Also explain what it means", type: 5, required: false },
       ],
     },
-
-    // ✅ NEW: Summarize channel
     {
       name: "summarizechannel",
       description: "Summarize the last N messages in this channel (max 100).",
       options: [
-        {
-          name: "count",
-          description: "How many recent messages? (1–100)",
-          type: 4, // INTEGER
-          required: true,
-        },
+        { name: "count", description: "How many recent messages? (1–100)", type: 4, required: true },
       ],
     },
 
-    // ---------- Context menu commands ----------
+    // Context menu
     { name: "Misfit: Summarize", type: ApplicationCommandType.Message },
     { name: "Misfit: Explain", type: ApplicationCommandType.Message },
     { name: "Misfit: Analyze Image", type: ApplicationCommandType.Message },
@@ -366,10 +329,10 @@ async function registerCommands() {
   try {
     if (target) {
       await target.commands.set(commands);
-      console.log(`✅ Registered GUILD slash commands (fast): ${guildId}`);
+      console.log(`✅ Registered GUILD commands (fast): ${guildId}`);
     } else {
       await client.application.commands.set(commands);
-      console.log("✅ Registered GLOBAL slash commands (may take time to appear)");
+      console.log("✅ Registered GLOBAL commands (may take time to appear)");
     }
   } catch (err) {
     console.error("❌ Failed to register commands:", err);
@@ -386,20 +349,152 @@ client.on("messageCreate", async (message) => {
   try {
     if (message.author.bot) return;
 
-    // Store reply context for slash usage
+    // Track reply context for slash usage
     if (message.reference?.messageId) {
-      setReplyContext(
-        message.author.id,
-        message.channel.id,
-        message.reference.messageId
-      );
+      setReplyContext(message.author.id, message.channel.id, message.reference.messageId);
     }
 
-    // Fun auto-reply
-    const text = message.content.toLowerCase().trim();
-    if (/^bruh+h*$/.test(text)) {
+    // Bruh trigger
+    const raw = message.content.toLowerCase().trim();
+    if (/^bruh+h*$/.test(raw)) {
       await message.reply("bruh indeed 😭");
       return;
+    }
+
+    // ===== Mention-based mode (restored) =====
+    if (!message.mentions.has(client.user)) return;
+
+    const isOwner = message.author.id === OWNER_ID;
+
+    // Remove bot mention from message
+    const userText = message.content
+      .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
+      .trim();
+
+    // Fetch replied message (if any)
+    let referencedText = "";
+    let repliedMsg = null;
+
+    if (message.reference?.messageId) {
+      try {
+        repliedMsg = await message.channel.messages.fetch(message.reference.messageId);
+        if (repliedMsg?.content) referencedText = repliedMsg.content.trim();
+      } catch {}
+    }
+
+    // Gather images/audio from current and replied message
+    let imageUrls = extractImageUrlsFromMessage(message);
+    let audioUrls = extractAudioUrlsFromMessage(message);
+
+    if (repliedMsg) {
+      imageUrls = imageUrls.concat(extractImageUrlsFromMessage(repliedMsg));
+      audioUrls = audioUrls.concat(extractAudioUrlsFromMessage(repliedMsg));
+    }
+
+    imageUrls = imageUrls.slice(0, 3);
+    audioUrls = audioUrls.slice(0, 1);
+
+    // ===== Owner-only memory commands (restored) =====
+    // @MisfitBot mem set @User <notes>
+    // @MisfitBot mem show @User
+    // @MisfitBot mem forget @User
+    const setMatch = userText.match(/^mem\s+set\s+<@!?(\d+)>\s+(.+)$/i);
+    if (setMatch) {
+      if (!isOwner) {
+        await message.reply("Nice try. Only Snooty can edit memory 😌");
+        return;
+      }
+      const targetId = setMatch[1];
+      const notes = setMatch[2].trim();
+
+      db.prepare(`
+        INSERT INTO user_memory (user_id, notes)
+        VALUES (?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET notes = excluded.notes
+      `).run(targetId, notes);
+
+      await message.reply(`Got it. I’ll remember that about <@${targetId}> 🧠`);
+      return;
+    }
+
+    const showMatch = userText.match(/^mem\s+show\s+<@!?(\d+)>$/i);
+    if (showMatch) {
+      if (!isOwner) {
+        await message.reply("Only Snooty can view other people’s memory 😌");
+        return;
+      }
+      const targetId = showMatch[1];
+      const row = db.prepare(`SELECT notes FROM user_memory WHERE user_id = ?`).get(targetId);
+      await message.reply(
+        row?.notes
+          ? `Memory for <@${targetId}>:\n${row.notes}`
+          : `I have nothing stored for <@${targetId}> yet.`
+      );
+      return;
+    }
+
+    const forgetMatch = userText.match(/^mem\s+forget\s+<@!?(\d+)>$/i);
+    if (forgetMatch) {
+      if (!isOwner) {
+        await message.reply("Only Snooty can wipe memory 😈");
+        return;
+      }
+      const targetId = forgetMatch[1];
+      db.prepare(`DELETE FROM user_memory WHERE user_id = ?`).run(targetId);
+      await message.reply(`Memory wiped for <@${targetId}> 🧽`);
+      return;
+    }
+
+    // If no prompt but audio exists -> transcribe + explain
+    if (!userText && audioUrls.length > 0) {
+      try {
+        await message.channel.sendTyping();
+        const transcript = await transcribeAudioFromUrl(audioUrls[0]);
+        const explanation = await makeChatReply({
+          userId: message.author.id,
+          userText: "Explain this transcript briefly and clearly.",
+          referencedText: transcript || "(empty transcript)",
+          imageUrls: [],
+        });
+
+        await message.reply(
+          `**Transcript:**\n${(transcript || "—").slice(0, 1400)}\n\n**Explanation:**\n${explanation}`.slice(
+            0,
+            1900
+          )
+        );
+      } catch (e) {
+        console.error(e);
+        await message.reply("⚠️ I couldn’t transcribe that voice note 😭");
+      }
+      return;
+    }
+
+    // If no prompt but images exist -> analyze image
+    const finalText =
+      userText && userText.length > 0
+        ? userText
+        : imageUrls.length > 0
+        ? "Analyze this image."
+        : "";
+
+    if (!finalText) {
+      await message.reply("Tag me with a question 😌");
+      return;
+    }
+
+    try {
+      await message.channel.sendTyping();
+      const reply = await makeChatReply({
+        userId: message.author.id,
+        userText: finalText,
+        referencedText,
+        imageUrls,
+      });
+      await message.reply(reply.slice(0, 1900));
+    } catch (e) {
+      console.error(e);
+      await message.reply("⚠️ Error generating a reply.");
     }
   } catch (err) {
     console.error(err);
@@ -417,7 +512,6 @@ async function resolveTargetMessageFromSlash(interaction, optionName = "message"
     return await ch.messages.fetch(parsed.messageId);
   }
 
-  // Use reply context
   const msgId = getReplyContext(interaction.user.id, interaction.channelId);
   if (!msgId) return null;
   return await interaction.channel.messages.fetch(msgId);
@@ -427,26 +521,33 @@ function helpText() {
   return [
     "**MisfitBot commands** 😌",
     "",
+    "**Tag me:**",
+    "• `@MisfitBot <question>` — ask normally",
+    "• Reply to an image/voice note and tag me — I’ll analyze/transcribe",
+    "",
+    "**Owner memory (Snooty only):**",
+    "• `@MisfitBot mem set @User <notes>`",
+    "• `@MisfitBot mem show @User`",
+    "• `@MisfitBot mem forget @User`",
+    "",
     "**Slash:**",
-    "• `/help` — show this list",
-    "• `/ask prompt:<text> [message:<link>]` — ask anything (optional: point at a message)",
-    "• `/summarize [message:<link>]` — summarize a message (or use reply-context)",
-    "• `/explain [message:<link>]` — explain a message (or use reply-context)",
-    "• `/analyzeimage [message:<link>] [prompt:<text>]` — analyze an image in a message",
-    "• `/transcribe [message:<link>] [explain:true|false]` — transcribe audio (optionally explain)",
-    "• `/imagine prompt:<text>` — generate an image",
-    "• `/summarizechannel count:<1-100>` — summarize recent channel messages",
+    "• `/help`",
+    "• `/ask prompt:<text> [message:<link>]`",
+    "• `/summarize [message:<link>]`",
+    "• `/explain [message:<link>]`",
+    "• `/analyzeimage [message:<link>] [prompt:<text>]`",
+    "• `/transcribe [message:<link>] [explain:true]`",
+    "• `/imagine prompt:<text>`",
+    "• `/summarizechannel count:<1-100>`",
     "",
     "**Right-click a message → Apps:**",
     "• Misfit: Summarize / Explain / Analyze Image / Transcribe Voice",
-    "",
-    "_Tip: For reply-context, reply to the target message with anything (like “.”), then run the slash command._",
   ].join("\n");
 }
 
 client.on("interactionCreate", async (interaction) => {
   try {
-    // ---------- Context Menu ----------
+    // Context Menu
     if (interaction.isMessageContextMenuCommand()) {
       const targetMsg = interaction.targetMessage;
 
@@ -495,12 +596,12 @@ client.on("interactionCreate", async (interaction) => {
         await interaction.deferReply();
         const aud = extractAudioUrlsFromMessage(targetMsg);
         if (aud.length === 0) {
-          await interaction.editReply("No audio/voice note found in that message 😌");
+          await interaction.editReply("No audio/voice note found 😌");
           return;
         }
         const transcript = await transcribeAudioFromUrl(aud[0]);
         if (!transcript) {
-          await interaction.editReply("Couldn’t transcribe that audio 😭");
+          await interaction.editReply("Couldn’t transcribe that 😭");
           return;
         }
         const explain = await makeChatReply({
@@ -518,7 +619,7 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // ---------- Slash Commands ----------
+    // Slash
     if (!interaction.isChatInputCommand()) return;
 
     if (interaction.commandName === "help") {
@@ -540,6 +641,7 @@ client.on("interactionCreate", async (interaction) => {
         referencedText,
         imageUrls: imgs,
       });
+
       await interaction.editReply(reply.slice(0, 1900));
       return;
     }
@@ -552,10 +654,7 @@ client.on("interactionCreate", async (interaction) => {
       const file = new AttachmentBuilder(pngBuf, { name: "misfit.png" });
 
       await interaction.editReply({
-        content: `Here. Don’t say I never do anything for you 😌\n**Prompt:** ${prompt}`.slice(
-          0,
-          1800
-        ),
+        content: `Here. Don’t say I never do anything for you 😌\n**Prompt:** ${prompt}`.slice(0, 1800),
         files: [file],
       });
       return;
@@ -566,7 +665,7 @@ client.on("interactionCreate", async (interaction) => {
       const targetMsg = await resolveTargetMessageFromSlash(interaction);
       if (!targetMsg) {
         await interaction.editReply(
-          "Reply to the message first (any text), then run `/summarize`, OR pass a message link in `/summarize message:` 😌"
+          "Reply to the message first (any text), then run `/summarize`, OR pass a message link 😌"
         );
         return;
       }
@@ -605,9 +704,7 @@ client.on("interactionCreate", async (interaction) => {
       const prompt = interaction.options.getString("prompt") || "Analyze this image.";
 
       if (!targetMsg) {
-        await interaction.editReply(
-          "Reply first, then run `/analyzeimage`, OR pass a message link 😌"
-        );
+        await interaction.editReply("Reply first, then run `/analyzeimage`, OR pass a message link 😌");
         return;
       }
       const imgs = extractImageUrlsFromMessage(targetMsg);
@@ -632,9 +729,7 @@ client.on("interactionCreate", async (interaction) => {
       const doExplain = interaction.options.getBoolean("explain") || false;
 
       if (!targetMsg) {
-        await interaction.editReply(
-          "Reply first, then run `/transcribe`, OR pass a message link 😌"
-        );
+        await interaction.editReply("Reply first, then run `/transcribe`, OR pass a message link 😌");
         return;
       }
       const aud = extractAudioUrlsFromMessage(targetMsg);
@@ -667,7 +762,6 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // ✅ NEW: summarizechannel
     if (interaction.commandName === "summarizechannel") {
       await interaction.deferReply();
 
@@ -689,7 +783,6 @@ client.on("interactionCreate", async (interaction) => {
         return;
       }
 
-      // Safety cap to avoid huge prompts
       const capped = lines.length > 12000 ? lines.slice(-12000) : lines;
 
       const reply = await makeChatReply({
@@ -709,10 +802,7 @@ client.on("interactionCreate", async (interaction) => {
       if (interaction.deferred || interaction.replied) {
         await interaction.editReply("⚠️ Something broke. Try again 😭");
       } else {
-        await interaction.reply({
-          content: "⚠️ Something broke. Try again 😭",
-          ephemeral: true,
-        });
+        await interaction.reply({ content: "⚠️ Something broke. Try again 😭", ephemeral: true });
       }
     } catch {}
   }
