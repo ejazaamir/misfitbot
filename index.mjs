@@ -256,6 +256,9 @@ const MODE_PRESETS = {
   serious:
     "- You are direct, clear, and professional.\n- Avoid jokes and teasing.\n- Focus on accuracy and actionable answers.\n- Avoid emojis unless user asks.",
   hype: "- You are energetic, playful, and upbeat.\n- Keep things positive and high-energy without being rude.\n- Keep replies compact and bold.\n- Use 1–3 emojis per message.",
+  rude: "- You are blunt, edgy, and sarcastic.\n- You can roast lightly, but do not bully or target protected traits.\n- Keep it short and stinging, still useful.\n- Use 0–2 emojis.",
+  ultraroast:
+    "- You are maximum roast mode: savage, dramatic, and brutally witty.\n- Roasts must stay non-hateful and non-discriminatory; no threats, no harassment.\n- Prioritize comedy over cruelty; keep responses concise and useful.\n- Use 0–2 emojis.",
 };
 
 const DEFAULT_BOT_MODE = "sassy";
@@ -625,6 +628,8 @@ async function registerCommands() {
                 { name: "chill", value: "chill" },
                 { name: "serious", value: "serious" },
                 { name: "hype", value: "hype" },
+                { name: "rude", value: "rude" },
+                { name: "ultraroast", value: "ultraroast" },
               ],
             },
           ],
@@ -956,7 +961,7 @@ function helpText() {
     "• `@MisfitBot mem forget @User`",
     "• `/welcome set channel:#channel message:<text>` (owner)",
     "• `/welcome show` / `/welcome preview` / `/welcome clear` (owner)",
-    "• `/mode set name:<sassy|chill|serious|hype>` / `/mode show` (owner)",
+    "• `/mode set name:<sassy|chill|serious|hype|rude|ultraroast>` / `/mode show` (owner)",
     "",
     "**Profiles (opt-in):**",
     "• `/profile set note:<text>`",
@@ -1191,7 +1196,7 @@ client.on("interactionCreate", async (interaction) => {
         const mode = interaction.options.getString("name", true).toLowerCase();
         if (!MODE_PRESETS[mode]) {
           await interaction.editReply(
-            "Invalid mode. Use one of: sassy, chill, serious, hype."
+            "Invalid mode. Use one of: sassy, chill, serious, hype, rude, ultraroast."
           );
           return;
         }
