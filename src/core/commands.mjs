@@ -561,7 +561,6 @@ export function getCommands({ ApplicationCommandType }) {
       ],
     },
     { name: "Misfit: Summarize", type: ApplicationCommandType.Message },
-    { name: "Misfit: Explain", type: ApplicationCommandType.Message },
     { name: "Misfit: Analyze Image", type: ApplicationCommandType.Message },
     { name: "Misfit: Transcribe Voice", type: ApplicationCommandType.Message },
     { name: "Misfit: Voice Note", type: ApplicationCommandType.Message },
@@ -611,7 +610,7 @@ export function getHelpText() {
     "• Auto-purge interval unit supports: seconds, minutes, hours, days",
     "",
     "**Right-click a message → Apps:**",
-    "• Misfit: Summarize / Explain / Analyze Image / Transcribe Voice / Voice Note / Beautify Text",
+    "• Misfit: Summarize / Analyze Image / Transcribe Voice / Voice Note / Beautify Text",
   ].join("\n");
 }
 
