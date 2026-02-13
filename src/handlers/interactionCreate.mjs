@@ -60,6 +60,88 @@ export function registerInteractionCreateHandler({
     if (!source) return "";
 
     const lines = source.split(/\r?\n/);
+    const maxLen = lines.reduce((m, l) => Math.max(m, l.length), 0);
+
+    const smallCapsMap = {
+      a: "ᴀ",
+      b: "ʙ",
+      c: "ᴄ",
+      d: "ᴅ",
+      e: "ᴇ",
+      f: "ꜰ",
+      g: "ɢ",
+      h: "ʜ",
+      i: "ɪ",
+      j: "ᴊ",
+      k: "ᴋ",
+      l: "ʟ",
+      m: "ᴍ",
+      n: "ɴ",
+      o: "ᴏ",
+      p: "ᴘ",
+      q: "ǫ",
+      r: "ʀ",
+      s: "ꜱ",
+      t: "ᴛ",
+      u: "ᴜ",
+      v: "ᴠ",
+      w: "ᴡ",
+      x: "x",
+      y: "ʏ",
+      z: "ᴢ",
+    };
+
+    const bubbleMap = {
+      a: "ⓐ",
+      b: "ⓑ",
+      c: "ⓒ",
+      d: "ⓓ",
+      e: "ⓔ",
+      f: "ⓕ",
+      g: "ⓖ",
+      h: "ⓗ",
+      i: "ⓘ",
+      j: "ⓙ",
+      k: "ⓚ",
+      l: "ⓛ",
+      m: "ⓜ",
+      n: "ⓝ",
+      o: "ⓞ",
+      p: "ⓟ",
+      q: "ⓠ",
+      r: "ⓡ",
+      s: "ⓢ",
+      t: "ⓣ",
+      u: "ⓤ",
+      v: "ⓥ",
+      w: "ⓦ",
+      x: "ⓧ",
+      y: "ⓨ",
+      z: "ⓩ",
+      "0": "⓪",
+      "1": "①",
+      "2": "②",
+      "3": "③",
+      "4": "④",
+      "5": "⑤",
+      "6": "⑥",
+      "7": "⑦",
+      "8": "⑧",
+      "9": "⑨",
+    };
+
+    const leetMap = {
+      a: "4",
+      e: "3",
+      i: "1",
+      l: "1",
+      o: "0",
+      s: "5",
+      t: "7",
+      b: "8",
+      g: "6",
+      z: "2",
+    };
 
     if (safeStyle === "code") {
       return `\`\`\`\n${source}\n\`\`\``;
@@ -87,12 +169,113 @@ export function registerInteractionCreateHandler({
       return waveLines.join("\n");
     }
 
+    if (safeStyle === "tinycaps") {
+      return lines
+        .map((line) =>
+          line
+            .split("")
+            .map((ch) => smallCapsMap[ch.toLowerCase()] || ch)
+            .join("")
+        )
+        .join("\n");
+    }
+
+    if (safeStyle === "bubble") {
+      return lines
+        .map((line) =>
+          line
+            .split("")
+            .map((ch) => bubbleMap[ch.toLowerCase()] || ch)
+            .join("")
+        )
+        .join("\n");
+    }
+
+    if (safeStyle === "leet") {
+      return lines
+        .map((line) =>
+          line
+            .split("")
+            .map((ch) => leetMap[ch.toLowerCase()] || ch)
+            .join("")
+        )
+        .join("\n");
+    }
+
+    if (safeStyle === "glitch") {
+      const marks = ["~", "^", "*", "`", "!", "+", ":", "."];
+      let idx = 0;
+      return lines
+        .map((line) =>
+          line
+            .split("")
+            .map((ch) => {
+              if (!/[a-z0-9]/i.test(ch)) return ch;
+              const m = marks[idx % marks.length];
+              idx += 1;
+              return `${ch}${m}`;
+            })
+            .join("")
+        )
+        .join("\n");
+    }
+
+    if (safeStyle === "shadow") {
+      const top = lines.join("\n");
+      const bottom = lines
+        .map((line) => ` ${line.replace(/[^\s]/g, ".")}`)
+        .join("\n");
+      return `${top}\n${bottom}`;
+    }
+
+    if (safeStyle === "matrix") {
+      const chars = source.replace(/\s+/g, "");
+      if (!chars) return source;
+      return chars
+        .slice(0, 180)
+        .split("")
+        .map((ch, i) => `${" ".repeat(i % 8)}${ch}`)
+        .join("\n");
+    }
+
     if (safeStyle === "staircase") {
       const words = source.split(/\s+/).filter(Boolean);
       return words.map((w, i) => `${" ".repeat(i * 2)}${w}`).join("\n");
     }
 
-    const maxLen = lines.reduce((m, l) => Math.max(m, l.length), 0);
+    if (safeStyle === "divider") {
+      const bar = "=".repeat(Math.max(20, Math.min(60, maxLen + 6)));
+      return `${bar}\n${source}\n${bar}`;
+    }
+
+    if (safeStyle === "banner") {
+      const width = Math.max(28, Math.min(72, maxLen + 8));
+      const edge = "=".repeat(width);
+      const centered = lines
+        .map((line) => {
+          const inner = width - 4;
+          const trimmed = line.slice(0, inner);
+          const left = Math.floor((inner - trimmed.length) / 2);
+          const right = inner - trimmed.length - left;
+          return `||${" ".repeat(left)}${trimmed}${" ".repeat(right)}||`;
+        })
+        .join("\n");
+      return `${edge}\n${centered}\n${edge}`;
+    }
+
+    if (safeStyle === "framed_quote") {
+      const quote = lines.map((line) => `> ${line}`).join("\n");
+      const top = `/${"-".repeat(maxLen + 4)}\\`;
+      const bottom = `\\${"-".repeat(maxLen + 4)}/`;
+      return `${top}\n${quote}\n${bottom}`;
+    }
+
+    if (safeStyle === "double_box") {
+      const top = `#${"=".repeat(maxLen + 2)}#`;
+      const body = lines.map((line) => `|| ${line.padEnd(maxLen, " ")} ||`).join("\n");
+      return `${top}\n${body}\n${top}`;
+    }
+
     const top = `+${"-".repeat(maxLen + 2)}+`;
     const body = lines.map((line) => `| ${line.padEnd(maxLen, " ")} |`).join("\n");
     return `${top}\n${body}\n${top}`;
