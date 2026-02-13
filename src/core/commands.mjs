@@ -615,36 +615,9 @@ export function getHelpText() {
 }
 
 export async function registerCommands(client, commands) {
-  const rawGuildIds = [
-    process.env.GUILD_ID || "",
-    ...(process.env.FAST_GUILD_IDS || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
-  ].filter(Boolean);
-  const guildIds = [...new Set(rawGuildIds)];
-
   try {
-    for (const guildId of guildIds) {
-      const guild =
-        client.guilds.cache.get(guildId) ||
-        (await client.guilds.fetch(guildId).catch(() => null));
-      if (!guild) {
-        console.warn(`⚠️ Could not fetch guild for fast command registration: ${guildId}`);
-        continue;
-      }
-      await guild.commands.set(commands);
-      console.log(`✅ Registered GUILD commands (fast): ${guildId}`);
-    }
-
     await client.application.commands.set(commands);
     console.log("✅ Registered GLOBAL commands (may take time to appear)");
-
-    if (guildIds.length === 0) {
-      console.log(
-        "ℹ️ Tip: set GUILD_ID (or FAST_GUILD_IDS) for near-instant command updates in your server."
-      );
-    }
   } catch (err) {
     console.error("❌ Failed to register commands:", err);
   }
