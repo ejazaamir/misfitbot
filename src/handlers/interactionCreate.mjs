@@ -110,13 +110,9 @@ export function registerInteractionCreateHandler({
       .setColor(EMBED_COLORS.info)
       .setTitle(`MBTI Test - Question ${questionIndex + 1}/${total}`)
       .setDescription(q.text)
-      .addFields(
-        { name: MBTI_AXIS_INFO.ei.label, value: String(scores.score_ei), inline: true },
-        { name: MBTI_AXIS_INFO.sn.label, value: String(scores.score_sn), inline: true },
-        { name: MBTI_AXIS_INFO.tf.label, value: String(scores.score_tf), inline: true },
-        { name: MBTI_AXIS_INFO.jp.label, value: String(scores.score_jp), inline: true }
-      )
-      .setFooter({ text: "Answer honestly. Strongly Disagree = -2, Strongly Agree = +2" });
+      .setFooter({
+        text: "Strongly Disagree=-2, Disagree=-1, Agree=+1, Strongly Agree=+2",
+      });
   }
 
   function mbtiButtons() {
@@ -138,6 +134,12 @@ export function registerInteractionCreateHandler({
           .setCustomId("mbti_ans:sa")
           .setLabel("Strongly Agree")
           .setStyle(ButtonStyle.Success)
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("mbti_nav:back")
+          .setLabel("Back")
+          .setStyle(ButtonStyle.Secondary)
       ),
     ];
   }
@@ -422,7 +424,12 @@ export function registerInteractionCreateHandler({
   client.on("interactionCreate", async (interaction) => {
     try {
       if (interaction.isButton()) {
-        if (!interaction.customId.startsWith("mbti_ans:")) return;
+        if (
+          !interaction.customId.startsWith("mbti_ans:") &&
+          !interaction.customId.startsWith("mbti_nav:")
+        ) {
+          return;
+        }
         if (!interaction.guildId) {
           await interaction.reply({
             content: "MBTI test only works in a server.",
@@ -431,16 +438,9 @@ export function registerInteractionCreateHandler({
           return;
         }
 
-        const answerKey = interaction.customId.slice("mbti_ans:".length);
-        const answerValue = MBTI_ANSWER_VALUES[answerKey];
-        if (!Number.isFinite(answerValue)) {
-          await interaction.reply({ content: "Invalid answer.", ephemeral: true });
-          return;
-        }
-
         const session = db
           .prepare(
-            `SELECT guild_id, user_id, current_index, score_ei, score_sn, score_tf, score_jp
+            `SELECT guild_id, user_id, current_index, score_ei, score_sn, score_tf, score_jp, answers_json
              FROM mbti_sessions
              WHERE guild_id = ? AND user_id = ? AND active = 1`
           )
@@ -451,6 +451,66 @@ export function registerInteractionCreateHandler({
             content: "No active MBTI session. Use `/mbti start`.",
             ephemeral: true,
           });
+          return;
+        }
+
+        let answers = [];
+        try {
+          answers = JSON.parse(session.answers_json || "[]");
+        } catch {}
+        if (!Array.isArray(answers)) answers = [];
+
+        if (interaction.customId === "mbti_nav:back") {
+          if (session.current_index <= 0 || answers.length === 0) {
+            await interaction.reply({
+              content: "You are already on the first question.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const last = answers.pop();
+          const nextScores = {
+            score_ei: session.score_ei,
+            score_sn: session.score_sn,
+            score_tf: session.score_tf,
+            score_jp: session.score_jp,
+          };
+          if (last?.axis && Number.isFinite(last?.delta)) {
+            const key = `score_${last.axis}`;
+            if (Object.prototype.hasOwnProperty.call(nextScores, key)) {
+              nextScores[key] -= last.delta;
+            }
+          }
+
+          const prevIndex = Math.max(0, session.current_index - 1);
+          db.prepare(
+            `UPDATE mbti_sessions
+             SET current_index = ?, score_ei = ?, score_sn = ?, score_tf = ?, score_jp = ?,
+                 answers_json = ?, updated_at = strftime('%s','now')
+             WHERE guild_id = ? AND user_id = ?`
+          ).run(
+            prevIndex,
+            nextScores.score_ei,
+            nextScores.score_sn,
+            nextScores.score_tf,
+            nextScores.score_jp,
+            JSON.stringify(answers),
+            interaction.guildId,
+            interaction.user.id
+          );
+
+          await interaction.update({
+            embeds: [mbtiQuestionEmbed(prevIndex, nextScores)],
+            components: mbtiButtons(),
+          });
+          return;
+        }
+
+        const answerKey = interaction.customId.slice("mbti_ans:".length);
+        const answerValue = MBTI_ANSWER_VALUES[answerKey];
+        if (!Number.isFinite(answerValue)) {
+          await interaction.reply({ content: "Invalid answer.", ephemeral: true });
           return;
         }
 
@@ -479,12 +539,14 @@ export function registerInteractionCreateHandler({
         };
         const key = `score_${q.axis}`;
         nextScores[key] += delta;
+        answers.push({ axis: q.axis, delta });
 
         const nextIndex = session.current_index + 1;
         if (nextIndex < MBTI_QUESTIONS.length) {
           db.prepare(
             `UPDATE mbti_sessions
              SET current_index = ?, score_ei = ?, score_sn = ?, score_tf = ?, score_jp = ?,
+                 answers_json = ?,
                  updated_at = strftime('%s','now')
              WHERE guild_id = ? AND user_id = ?`
           ).run(
@@ -493,6 +555,7 @@ export function registerInteractionCreateHandler({
             nextScores.score_sn,
             nextScores.score_tf,
             nextScores.score_jp,
+            JSON.stringify(answers),
             interaction.guildId,
             interaction.user.id
           );
@@ -508,6 +571,7 @@ export function registerInteractionCreateHandler({
         db.prepare(
           `UPDATE mbti_sessions
            SET active = 0, current_index = ?, score_ei = ?, score_sn = ?, score_tf = ?, score_jp = ?,
+               answers_json = ?,
                updated_at = strftime('%s','now')
            WHERE guild_id = ? AND user_id = ?`
         ).run(
@@ -516,6 +580,7 @@ export function registerInteractionCreateHandler({
           nextScores.score_sn,
           nextScores.score_tf,
           nextScores.score_jp,
+          JSON.stringify(answers),
           interaction.guildId,
           interaction.user.id
         );
@@ -559,6 +624,10 @@ export function registerInteractionCreateHandler({
         await interaction.update({
           embeds: [resultEmbed],
           components: [],
+        });
+        await interaction.followUp({
+          content: `🧠 I am **${mbtiType}**. (<@${interaction.user.id}>)`,
+          ephemeral: false,
         });
         return;
       }
@@ -1109,15 +1178,16 @@ export function registerInteractionCreateHandler({
 
           db.prepare(
             `INSERT INTO mbti_sessions (
-              guild_id, user_id, current_index, score_ei, score_sn, score_tf, score_jp, active, updated_at
+              guild_id, user_id, current_index, score_ei, score_sn, score_tf, score_jp, answers_json, active, updated_at
             )
-            VALUES (?, ?, 0, 0, 0, 0, 0, 1, strftime('%s','now'))
+            VALUES (?, ?, 0, 0, 0, 0, 0, '[]', 1, strftime('%s','now'))
             ON CONFLICT(guild_id, user_id) DO UPDATE SET
               current_index = 0,
               score_ei = 0,
               score_sn = 0,
               score_tf = 0,
               score_jp = 0,
+              answers_json = '[]',
               active = 1,
               updated_at = strftime('%s','now')`
           ).run(interaction.guildId, interaction.user.id);

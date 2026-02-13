@@ -93,6 +93,7 @@ export function createDb({ dbPath, defaultBotMode }) {
       score_sn INTEGER NOT NULL DEFAULT 0,
       score_tf INTEGER NOT NULL DEFAULT 0,
       score_jp INTEGER NOT NULL DEFAULT 0,
+      answers_json TEXT NOT NULL DEFAULT '[]',
       active INTEGER NOT NULL DEFAULT 1,
       updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
       PRIMARY KEY (guild_id, user_id)
@@ -127,6 +128,11 @@ export function createDb({ dbPath, defaultBotMode }) {
     "scheduled_messages",
     "embed_json",
     "embed_json TEXT NOT NULL DEFAULT ''"
+  );
+  ensureColumn(
+    "mbti_sessions",
+    "answers_json",
+    "answers_json TEXT NOT NULL DEFAULT '[]'"
   );
 
   db.exec(`
