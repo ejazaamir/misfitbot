@@ -84,6 +84,35 @@ export function createDb({ dbPath, defaultBotMode }) {
     );
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mbti_sessions (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      current_index INTEGER NOT NULL DEFAULT 0,
+      score_ei INTEGER NOT NULL DEFAULT 0,
+      score_sn INTEGER NOT NULL DEFAULT 0,
+      score_tf INTEGER NOT NULL DEFAULT 0,
+      score_jp INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      PRIMARY KEY (guild_id, user_id)
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mbti_results (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      mbti_type TEXT NOT NULL,
+      score_ei INTEGER NOT NULL DEFAULT 0,
+      score_sn INTEGER NOT NULL DEFAULT 0,
+      score_tf INTEGER NOT NULL DEFAULT 0,
+      score_jp INTEGER NOT NULL DEFAULT 0,
+      completed_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      PRIMARY KEY (guild_id, user_id)
+    );
+  `);
+
   ensureColumn(
     "auto_purge_rules",
     "interval_seconds",

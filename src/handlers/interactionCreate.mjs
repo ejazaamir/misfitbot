@@ -5,7 +5,10 @@ import {
   ActionRowBuilder,
   TextInputBuilder,
   TextInputStyle,
+  ButtonBuilder,
+  ButtonStyle,
 } from "discord.js";
+import { MBTI_QUESTIONS, MBTI_TYPE_SUMMARIES, MBTI_AXIS_INFO } from "../core/mbti.mjs";
 
 export function registerInteractionCreateHandler({
   client,
@@ -83,6 +86,80 @@ export function registerInteractionCreateHandler({
     const hex = raw.replace(/^#/, "").toUpperCase();
     if (!/^[0-9A-F]{6}$/.test(hex)) return null;
     return parseInt(hex, 16);
+  }
+
+  const MBTI_ANSWER_VALUES = {
+    sd: -2,
+    d: -1,
+    a: 1,
+    sa: 2,
+  };
+
+  function computeMbtiType(scores) {
+    const ei = scores.score_ei >= 0 ? "E" : "I";
+    const sn = scores.score_sn >= 0 ? "S" : "N";
+    const tf = scores.score_tf >= 0 ? "T" : "F";
+    const jp = scores.score_jp >= 0 ? "J" : "P";
+    return `${ei}${sn}${tf}${jp}`;
+  }
+
+  function mbtiQuestionEmbed(questionIndex, scores) {
+    const q = MBTI_QUESTIONS[questionIndex];
+    const total = MBTI_QUESTIONS.length;
+    return new EmbedBuilder()
+      .setColor(EMBED_COLORS.info)
+      .setTitle(`MBTI Test - Question ${questionIndex + 1}/${total}`)
+      .setDescription(q.text)
+      .addFields(
+        { name: MBTI_AXIS_INFO.ei.label, value: String(scores.score_ei), inline: true },
+        { name: MBTI_AXIS_INFO.sn.label, value: String(scores.score_sn), inline: true },
+        { name: MBTI_AXIS_INFO.tf.label, value: String(scores.score_tf), inline: true },
+        { name: MBTI_AXIS_INFO.jp.label, value: String(scores.score_jp), inline: true }
+      )
+      .setFooter({ text: "Answer honestly. Strongly Disagree = -2, Strongly Agree = +2" });
+  }
+
+  function mbtiButtons() {
+    return [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("mbti_ans:sd")
+          .setLabel("Strongly Disagree")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId("mbti_ans:d")
+          .setLabel("Disagree")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId("mbti_ans:a")
+          .setLabel("Agree")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("mbti_ans:sa")
+          .setLabel("Strongly Agree")
+          .setStyle(ButtonStyle.Success)
+      ),
+    ];
+  }
+
+  async function assignMbtiRole(guild, userId, mbtiType) {
+    const targetRoleName = `MBTI-${mbtiType}`;
+    let role = guild.roles.cache.find((r) => r.name === targetRoleName);
+    if (!role) {
+      role = await guild.roles.create({
+        name: targetRoleName,
+        reason: "Auto-created MBTI personality role",
+      });
+    }
+
+    const member = await guild.members.fetch(userId);
+    const toRemove = guild.roles.cache.filter(
+      (r) => /^MBTI-[A-Z]{4}$/.test(r.name) && member.roles.cache.has(r.id)
+    );
+    if (toRemove.size > 0) {
+      await member.roles.remove([...toRemove.keys()]).catch(() => {});
+    }
+    await member.roles.add(role.id).catch(() => {});
   }
 
   async function generateVibeSummary(note) {
@@ -344,6 +421,148 @@ export function registerInteractionCreateHandler({
 
   client.on("interactionCreate", async (interaction) => {
     try {
+      if (interaction.isButton()) {
+        if (!interaction.customId.startsWith("mbti_ans:")) return;
+        if (!interaction.guildId) {
+          await interaction.reply({
+            content: "MBTI test only works in a server.",
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const answerKey = interaction.customId.slice("mbti_ans:".length);
+        const answerValue = MBTI_ANSWER_VALUES[answerKey];
+        if (!Number.isFinite(answerValue)) {
+          await interaction.reply({ content: "Invalid answer.", ephemeral: true });
+          return;
+        }
+
+        const session = db
+          .prepare(
+            `SELECT guild_id, user_id, current_index, score_ei, score_sn, score_tf, score_jp
+             FROM mbti_sessions
+             WHERE guild_id = ? AND user_id = ? AND active = 1`
+          )
+          .get(interaction.guildId, interaction.user.id);
+
+        if (!session) {
+          await interaction.reply({
+            content: "No active MBTI session. Use `/mbti start`.",
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const q = MBTI_QUESTIONS[session.current_index];
+        if (!q) {
+          db.prepare(
+            `UPDATE mbti_sessions SET active = 0, updated_at = strftime('%s','now')
+             WHERE guild_id = ? AND user_id = ?`
+          ).run(interaction.guildId, interaction.user.id);
+          await interaction.reply({
+            content: "Session finished. Use `/mbti result`.",
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const axis = MBTI_AXIS_INFO[q.axis];
+        const sign = q.agree === axis.positive ? 1 : -1;
+        const delta = answerValue * sign;
+
+        const nextScores = {
+          score_ei: session.score_ei,
+          score_sn: session.score_sn,
+          score_tf: session.score_tf,
+          score_jp: session.score_jp,
+        };
+        const key = `score_${q.axis}`;
+        nextScores[key] += delta;
+
+        const nextIndex = session.current_index + 1;
+        if (nextIndex < MBTI_QUESTIONS.length) {
+          db.prepare(
+            `UPDATE mbti_sessions
+             SET current_index = ?, score_ei = ?, score_sn = ?, score_tf = ?, score_jp = ?,
+                 updated_at = strftime('%s','now')
+             WHERE guild_id = ? AND user_id = ?`
+          ).run(
+            nextIndex,
+            nextScores.score_ei,
+            nextScores.score_sn,
+            nextScores.score_tf,
+            nextScores.score_jp,
+            interaction.guildId,
+            interaction.user.id
+          );
+
+          await interaction.update({
+            embeds: [mbtiQuestionEmbed(nextIndex, nextScores)],
+            components: mbtiButtons(),
+          });
+          return;
+        }
+
+        const mbtiType = computeMbtiType(nextScores);
+        db.prepare(
+          `UPDATE mbti_sessions
+           SET active = 0, current_index = ?, score_ei = ?, score_sn = ?, score_tf = ?, score_jp = ?,
+               updated_at = strftime('%s','now')
+           WHERE guild_id = ? AND user_id = ?`
+        ).run(
+          MBTI_QUESTIONS.length,
+          nextScores.score_ei,
+          nextScores.score_sn,
+          nextScores.score_tf,
+          nextScores.score_jp,
+          interaction.guildId,
+          interaction.user.id
+        );
+
+        db.prepare(
+          `INSERT INTO mbti_results (guild_id, user_id, mbti_type, score_ei, score_sn, score_tf, score_jp, completed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))
+           ON CONFLICT(guild_id, user_id) DO UPDATE SET
+             mbti_type = excluded.mbti_type,
+             score_ei = excluded.score_ei,
+             score_sn = excluded.score_sn,
+             score_tf = excluded.score_tf,
+             score_jp = excluded.score_jp,
+             completed_at = strftime('%s','now')`
+        ).run(
+          interaction.guildId,
+          interaction.user.id,
+          mbtiType,
+          nextScores.score_ei,
+          nextScores.score_sn,
+          nextScores.score_tf,
+          nextScores.score_jp
+        );
+
+        await assignMbtiRole(interaction.guild, interaction.user.id, mbtiType).catch(
+          () => {}
+        );
+
+        const resultEmbed = new EmbedBuilder()
+          .setColor(EMBED_COLORS.success)
+          .setTitle(`Your MBTI Result: ${mbtiType}`)
+          .setDescription(MBTI_TYPE_SUMMARIES[mbtiType] || "No summary available.")
+          .addFields(
+            { name: MBTI_AXIS_INFO.ei.label, value: String(nextScores.score_ei), inline: true },
+            { name: MBTI_AXIS_INFO.sn.label, value: String(nextScores.score_sn), inline: true },
+            { name: MBTI_AXIS_INFO.tf.label, value: String(nextScores.score_tf), inline: true },
+            { name: MBTI_AXIS_INFO.jp.label, value: String(nextScores.score_jp), inline: true }
+          )
+          .setFooter({ text: "Role assigned: MBTI-{type} (if bot has role permissions)." });
+
+        await interaction.update({
+          embeds: [resultEmbed],
+          components: [],
+        });
+        return;
+      }
+
       if (interaction.isModalSubmit()) {
         const cid = interaction.customId;
 
@@ -852,6 +1071,165 @@ export function registerInteractionCreateHandler({
         } else {
           await interaction.reply({ embeds: [embed], ephemeral: true });
         }
+        return;
+      }
+
+      if (interaction.commandName === "mbti") {
+        if (!interaction.guildId) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "MBTI Test",
+                description: "This command only works in a server.",
+                tone: "warn",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const sub = interaction.options.getSubcommand();
+
+        if (sub === "start") {
+          const mbtiChannelId = process.env.MBTI_CHANNEL_ID || "";
+          if (mbtiChannelId && interaction.channelId !== mbtiChannelId) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Wrong Channel",
+                  description: `Use this in <#${mbtiChannelId}>.`,
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          db.prepare(
+            `INSERT INTO mbti_sessions (
+              guild_id, user_id, current_index, score_ei, score_sn, score_tf, score_jp, active, updated_at
+            )
+            VALUES (?, ?, 0, 0, 0, 0, 0, 1, strftime('%s','now'))
+            ON CONFLICT(guild_id, user_id) DO UPDATE SET
+              current_index = 0,
+              score_ei = 0,
+              score_sn = 0,
+              score_tf = 0,
+              score_jp = 0,
+              active = 1,
+              updated_at = strftime('%s','now')`
+          ).run(interaction.guildId, interaction.user.id);
+
+          await interaction.reply({
+            embeds: [
+              mbtiQuestionEmbed(0, {
+                score_ei: 0,
+                score_sn: 0,
+                score_tf: 0,
+                score_jp: 0,
+              }),
+            ],
+            components: mbtiButtons(),
+            ephemeral: true,
+          });
+          return;
+        }
+
+        if (sub === "result") {
+          const row = db
+            .prepare(
+              `SELECT mbti_type, score_ei, score_sn, score_tf, score_jp, completed_at
+               FROM mbti_results WHERE guild_id = ? AND user_id = ?`
+            )
+            .get(interaction.guildId, interaction.user.id);
+
+          if (!row) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "No MBTI Result",
+                  description: "Run `/mbti start` first.",
+                  tone: "info",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const embed = new EmbedBuilder()
+            .setColor(EMBED_COLORS.info)
+            .setTitle(`Your MBTI Result: ${row.mbti_type}`)
+            .setDescription(
+              MBTI_TYPE_SUMMARIES[row.mbti_type] || "No summary available."
+            )
+            .addFields(
+              { name: MBTI_AXIS_INFO.ei.label, value: String(row.score_ei), inline: true },
+              { name: MBTI_AXIS_INFO.sn.label, value: String(row.score_sn), inline: true },
+              { name: MBTI_AXIS_INFO.tf.label, value: String(row.score_tf), inline: true },
+              { name: MBTI_AXIS_INFO.jp.label, value: String(row.score_jp), inline: true }
+            )
+            .setFooter({
+              text: `Completed: <t:${row.completed_at}:R>`,
+            });
+
+          await interaction.reply({ embeds: [embed], ephemeral: true });
+          return;
+        }
+
+        if (sub === "reset") {
+          const targetUser = interaction.options.getUser("user");
+          const isOwner = interaction.user.id === OWNER_ID;
+          const targetId = targetUser ? targetUser.id : interaction.user.id;
+
+          if (targetUser && !isOwner) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Permission Denied",
+                  description: "Only Snooty can reset someone else’s MBTI data.",
+                  tone: "error",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          db.prepare(
+            `DELETE FROM mbti_sessions WHERE guild_id = ? AND user_id = ?`
+          ).run(interaction.guildId, targetId);
+          db.prepare(
+            `DELETE FROM mbti_results WHERE guild_id = ? AND user_id = ?`
+          ).run(interaction.guildId, targetId);
+
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "MBTI Reset",
+                description: targetUser
+                  ? `Reset MBTI data for <@${targetId}>.`
+                  : "Your MBTI data has been reset.",
+                tone: "success",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        await interaction.reply({
+          embeds: [
+            statusEmbed({
+              title: "MBTI",
+              description: "That subcommand isn’t wired up 😌",
+              tone: "warn",
+            }),
+          ],
+          ephemeral: true,
+        });
         return;
       }
 

@@ -177,6 +177,35 @@ export function getCommands({ ApplicationCommandType }) {
       ],
     },
     {
+      name: "mbti",
+      description: "Take an MBTI-style personality test.",
+      options: [
+        {
+          type: 1,
+          name: "start",
+          description: "Start (or restart) your MBTI test.",
+        },
+        {
+          type: 1,
+          name: "result",
+          description: "Show your latest MBTI result.",
+        },
+        {
+          type: 1,
+          name: "reset",
+          description: "Reset MBTI session/result (owner can reset others).",
+          options: [
+            {
+              type: 6,
+              name: "user",
+              description: "User to reset (owner-only)",
+              required: false,
+            },
+          ],
+        },
+      ],
+    },
+    {
       name: "schedule",
       description: "Owner only: schedule messages (one-time or repeating).",
       options: [
@@ -640,6 +669,7 @@ export function getHelpText() {
     "• `/summarizechannel count:<1-100>`",
     "• `/voicenote text:<text> [voice]`",
     "• `/beautify [text] [message:<link>] [style]`",
+    "• `/mbti start` / `/mbti result` / `/mbti reset [user]`",
     "• Beautify styles: box, double_box, banner, wave, glitch, spaced, tinycaps, bubble, leet, shadow, matrix, staircase, framed_quote, divider, code",
     "• `/schedule when:` ISO UTC (`2026-02-14T21:30:00Z`), unix, `dd/hh/mm` (`01/02/30`), `hh/mm`, or `1d2h30m`",
     "• Purge note: Discord only bulk-deletes messages newer than 14 days",
