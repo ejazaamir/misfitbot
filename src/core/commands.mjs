@@ -334,9 +334,21 @@ export function getCommands({ ApplicationCommandType }) {
             },
             {
               type: 4,
-              name: "interval_minutes",
-              description: "Purge every N minutes (min 1)",
+              name: "every",
+              description: "Run every N units",
               required: true,
+            },
+            {
+              type: 3,
+              name: "unit",
+              description: "Interval unit",
+              required: false,
+              choices: [
+                { name: "seconds", value: "seconds" },
+                { name: "minutes", value: "minutes" },
+                { name: "hours", value: "hours" },
+                { name: "days", value: "days" },
+              ],
             },
             {
               type: 3,
@@ -562,6 +574,7 @@ export function getHelpText() {
     "• `/voicenote text:<text> [voice]`",
     "• Time format for `/schedule when:` use ISO UTC like `2026-02-14T21:30:00Z`",
     "• Purge note: Discord only bulk-deletes messages newer than 14 days",
+    "• Auto-purge interval unit supports: seconds, minutes, hours, days",
     "",
     "**Right-click a message → Apps:**",
     "• Misfit: Summarize / Explain / Analyze Image / Transcribe Voice / Voice Note",

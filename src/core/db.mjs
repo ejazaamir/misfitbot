@@ -3,6 +3,12 @@ import Database from "better-sqlite3";
 export function createDb({ dbPath, defaultBotMode }) {
   const db = new Database(dbPath);
 
+  function ensureColumn(table, column, ddl) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+    const exists = cols.some((c) => c.name === column);
+    if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_memory (
       user_id TEXT PRIMARY KEY,
@@ -75,6 +81,12 @@ export function createDb({ dbPath, defaultBotMode }) {
       updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
     );
   `);
+
+  ensureColumn(
+    "auto_purge_rules",
+    "interval_seconds",
+    "interval_seconds INTEGER NOT NULL DEFAULT 0"
+  );
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_auto_purge_due

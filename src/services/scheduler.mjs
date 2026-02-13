@@ -192,7 +192,7 @@ export function createSchedulerService({
       const now = Math.floor(Date.now() / 1000);
       const dueRules = db
         .prepare(
-          `SELECT id, guild_id, channel_id, mode, interval_minutes, scan_limit
+          `SELECT id, guild_id, channel_id, mode, interval_minutes, interval_seconds, scan_limit
            FROM auto_purge_rules
            WHERE active = 1 AND next_run_at <= ?
            ORDER BY next_run_at ASC
@@ -211,7 +211,10 @@ export function createSchedulerService({
             clampPurgeScanLimit(rule.scan_limit, 200)
           );
 
-          const intervalSec = Math.max(1, Number(rule.interval_minutes || 1)) * 60;
+          const intervalSec =
+            Number(rule.interval_seconds || 0) > 0
+              ? Math.max(1, Number(rule.interval_seconds))
+              : Math.max(1, Number(rule.interval_minutes || 1)) * 60;
           let next = now + intervalSec;
           if (next <= now) next = now + intervalSec;
 

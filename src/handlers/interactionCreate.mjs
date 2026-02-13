@@ -612,15 +612,31 @@ export function registerInteractionCreateHandler({
             return;
           }
 
-          let intervalMinutes = interaction.options.getInteger(
-            "interval_minutes",
-            true
-          );
-          if (intervalMinutes < 1) intervalMinutes = 1;
-          if (intervalMinutes > 10080) {
-            await interaction.editReply("`interval_minutes` max is 10080 (7 days).");
+          let every = interaction.options.getInteger("every", true);
+          const unit = (interaction.options.getString("unit") || "minutes").toLowerCase();
+          const unitMap = {
+            seconds: 1,
+            minutes: 60,
+            hours: 3600,
+            days: 86400,
+          };
+          const mult = unitMap[unit];
+          if (!mult) {
+            await interaction.editReply("Invalid `unit`. Use seconds, minutes, hours, or days.");
             return;
           }
+          if (every < 1) every = 1;
+
+          const intervalSeconds = every * mult;
+          if (intervalSeconds < 5) {
+            await interaction.editReply("Minimum interval is 5 seconds.");
+            return;
+          }
+          if (intervalSeconds > 86400 * 30) {
+            await interaction.editReply("Maximum interval is 30 days.");
+            return;
+          }
+          const intervalMinutes = Math.max(1, Math.ceil(intervalSeconds / 60));
 
           const mode = (interaction.options.getString("mode") || "all").toLowerCase();
           if (!autoPurgeModes.has(mode)) {
@@ -634,18 +650,19 @@ export function registerInteractionCreateHandler({
           );
 
           const now = Math.floor(Date.now() / 1000);
-          const nextRun = now + Math.max(60, intervalMinutes * 60);
+          const nextRun = now + intervalSeconds;
 
           db.prepare(`
             INSERT INTO auto_purge_rules (
-              guild_id, channel_id, mode, interval_minutes, scan_limit,
+              guild_id, channel_id, mode, interval_minutes, interval_seconds, scan_limit,
               next_run_at, active, last_error, created_by, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, 1, '', ?, strftime('%s','now'), strftime('%s','now'))
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, '', ?, strftime('%s','now'), strftime('%s','now'))
             ON CONFLICT(channel_id) DO UPDATE SET
               guild_id = excluded.guild_id,
               mode = excluded.mode,
               interval_minutes = excluded.interval_minutes,
+              interval_seconds = excluded.interval_seconds,
               scan_limit = excluded.scan_limit,
               next_run_at = excluded.next_run_at,
               active = 1,
@@ -656,6 +673,7 @@ export function registerInteractionCreateHandler({
             channel.id,
             mode,
             intervalMinutes,
+            intervalSeconds,
             scanLimit,
             nextRun,
             interaction.user.id
@@ -665,7 +683,7 @@ export function registerInteractionCreateHandler({
             [
               `✅ Auto-purge set for <#${channel.id}>.`,
               `Mode: ${mode}`,
-              `Interval: every ${intervalMinutes} minute(s)`,
+              `Interval: every ${every} ${unit}`,
               `Scan limit per run: ${scanLimit}`,
               `Next run: <t:${nextRun}:F>`,
             ].join("\n")
@@ -676,7 +694,7 @@ export function registerInteractionCreateHandler({
         if (sub === "autopurge_list") {
           const rows = db
             .prepare(
-              `SELECT id, channel_id, mode, interval_minutes, scan_limit, next_run_at, active, last_error
+              `SELECT id, channel_id, mode, interval_minutes, interval_seconds, scan_limit, next_run_at, active, last_error
                FROM auto_purge_rules
                WHERE guild_id = ?
                ORDER BY id DESC
@@ -691,7 +709,15 @@ export function registerInteractionCreateHandler({
 
           const lines = rows.map((r) => {
             const err = r.last_error ? ` | err: ${String(r.last_error).slice(0, 40)}` : "";
-            return `#${r.id} | <#${r.channel_id}> | mode:${r.mode} | every ${r.interval_minutes}m | scan:${r.scan_limit} | next <t:${r.next_run_at}:R> | ${r.active ? "active" : "paused"}${err}`;
+            const secs =
+              Number(r.interval_seconds || 0) > 0
+                ? Number(r.interval_seconds)
+                : Math.max(1, Number(r.interval_minutes || 1)) * 60;
+            let label = `${secs}s`;
+            if (secs % 86400 === 0) label = `${secs / 86400}d`;
+            else if (secs % 3600 === 0) label = `${secs / 3600}h`;
+            else if (secs % 60 === 0) label = `${secs / 60}m`;
+            return `#${r.id} | <#${r.channel_id}> | mode:${r.mode} | every ${label} | scan:${r.scan_limit} | next <t:${r.next_run_at}:R> | ${r.active ? "active" : "paused"}${err}`;
           });
 
           await interaction.editReply(
