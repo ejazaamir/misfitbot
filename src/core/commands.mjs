@@ -627,6 +627,17 @@ export function getHelpText() {
 
 export async function registerCommands(client, commands) {
   try {
+    // Cleanup step: remove legacy guild-scoped commands so global-only
+    // registration does not appear duplicated in clients.
+    for (const guild of client.guilds.cache.values()) {
+      try {
+        await guild.commands.set([]);
+        console.log(`🧹 Cleared guild-scoped commands: ${guild.id}`);
+      } catch (err) {
+        console.warn(`⚠️ Could not clear guild commands for ${guild.id}:`, err);
+      }
+    }
+
     await client.application.commands.set(commands);
     console.log("✅ Registered GLOBAL commands (may take time to appear)");
   } catch (err) {
