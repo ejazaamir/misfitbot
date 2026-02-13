@@ -180,6 +180,20 @@ db.exec(`
   );
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS bot_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+  );
+`);
+
+db.prepare(`
+  INSERT INTO bot_config (key, value, updated_at)
+  VALUES ('mode', 'sassy', strftime('%s','now'))
+  ON CONFLICT(key) DO NOTHING
+`).run();
+
 function getProfile(userId) {
   return db
     .prepare(`SELECT notes, vibe_summary FROM user_profiles WHERE user_id = ?`)
@@ -232,6 +246,34 @@ function upsertWelcomeConfig(guildId, channelId, message, updatedBy) {
 
 function clearWelcomeConfig(guildId) {
   db.prepare(`DELETE FROM welcome_config WHERE guild_id = ?`).run(guildId);
+}
+
+const MODE_PRESETS = {
+  sassy:
+    "- You are helpful, but slightly sassy and witty.\n- Light teasing is allowed, but never insult people harshly.\n- Keep replies short and punchy unless asked for detail.\n- Use 0–2 emojis per message.",
+  chill:
+    "- You are calm, friendly, and supportive.\n- No teasing; keep tone relaxed.\n- Keep replies concise unless asked for detail.\n- Use 0–1 emojis per message.",
+  serious:
+    "- You are direct, clear, and professional.\n- Avoid jokes and teasing.\n- Focus on accuracy and actionable answers.\n- Avoid emojis unless user asks.",
+  hype: "- You are energetic, playful, and upbeat.\n- Keep things positive and high-energy without being rude.\n- Keep replies compact and bold.\n- Use 1–3 emojis per message.",
+};
+
+const DEFAULT_BOT_MODE = "sassy";
+
+function getBotMode() {
+  const row = db.prepare(`SELECT value FROM bot_config WHERE key = 'mode'`).get();
+  const mode = String(row?.value || DEFAULT_BOT_MODE).toLowerCase();
+  return MODE_PRESETS[mode] ? mode : DEFAULT_BOT_MODE;
+}
+
+function setBotMode(mode) {
+  db.prepare(`
+    INSERT INTO bot_config (key, value, updated_at)
+    VALUES ('mode', ?, strftime('%s','now'))
+    ON CONFLICT(key) DO UPDATE SET
+      value = excluded.value,
+      updated_at = strftime('%s','now')
+  `).run(mode);
 }
 
 function formatWelcomeMessage(template, guildName, memberId) {
@@ -295,6 +337,7 @@ ${profileRow.vibe_summary || "(none)"}`
   const finalPrompt = referencedText
     ? `Message being replied to:\n\n${referencedText}\n\nUser request:\n${userText}`
     : userText;
+  const botMode = getBotMode();
 
   const userMessage =
     imageUrls?.length > 0
@@ -327,10 +370,8 @@ ${askerMemory ? askerMemory : "(none)"}
 ${profileBlock}
 
 Personality rules:
-- You are helpful, but slightly sassy and witty.
-- Light teasing is allowed, but never insult people harshly.
-- Keep replies short and punchy unless asked for detail.
-- Use 0–2 emojis per message.
+Current mode: ${botMode}
+${MODE_PRESETS[botMode]}
 - Never use hate speech, slurs, or discriminatory jokes.
 - Never mention system messages, tokens, OpenAI, or that you're an AI.
         `.trim(),
@@ -562,6 +603,36 @@ async function registerCommands() {
           type: 1,
           name: "clear",
           description: "Clear DB welcome config and fall back to .env.",
+        },
+      ],
+    },
+    {
+      name: "mode",
+      description: "Owner only: change bot personality mode.",
+      options: [
+        {
+          type: 1,
+          name: "set",
+          description: "Set the active bot mode.",
+          options: [
+            {
+              type: 3,
+              name: "name",
+              description: "Mode name",
+              required: true,
+              choices: [
+                { name: "sassy", value: "sassy" },
+                { name: "chill", value: "chill" },
+                { name: "serious", value: "serious" },
+                { name: "hype", value: "hype" },
+              ],
+            },
+          ],
+        },
+        {
+          type: 1,
+          name: "show",
+          description: "Show current bot mode.",
         },
       ],
     },
@@ -885,6 +956,7 @@ function helpText() {
     "• `@MisfitBot mem forget @User`",
     "• `/welcome set channel:#channel message:<text>` (owner)",
     "• `/welcome show` / `/welcome preview` / `/welcome clear` (owner)",
+    "• `/mode set name:<sassy|chill|serious|hype>` / `/mode show` (owner)",
     "",
     "**Profiles (opt-in):**",
     "• `/profile set note:<text>`",
@@ -1092,6 +1164,39 @@ client.on("interactionCreate", async (interaction) => {
       if (sub === "clear") {
         clearWelcomeConfig(interaction.guildId);
         await interaction.editReply("🧽 Welcome config cleared. Falling back to `.env`.");
+        return;
+      }
+
+      await interaction.editReply("That subcommand isn’t wired up 😌");
+      return;
+    }
+
+    if (interaction.commandName === "mode") {
+      await safeDefer(interaction, { ephemeral: true });
+
+      const isOwner = interaction.user.id === OWNER_ID;
+      if (!isOwner) {
+        await interaction.editReply("Only Snooty can change bot mode 😌");
+        return;
+      }
+
+      const sub = interaction.options.getSubcommand();
+
+      if (sub === "show") {
+        await interaction.editReply(`Current mode: \`${getBotMode()}\``);
+        return;
+      }
+
+      if (sub === "set") {
+        const mode = interaction.options.getString("name", true).toLowerCase();
+        if (!MODE_PRESETS[mode]) {
+          await interaction.editReply(
+            "Invalid mode. Use one of: sassy, chill, serious, hype."
+          );
+          return;
+        }
+        setBotMode(mode);
+        await interaction.editReply(`✅ Mode updated to \`${mode}\`.`);
         return;
       }
 
