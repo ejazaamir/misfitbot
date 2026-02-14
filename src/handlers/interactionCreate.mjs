@@ -232,7 +232,7 @@ export function registerInteractionCreateHandler({
     try {
       rows = db
         .prepare(
-          `SELECT id, genre, question, question_key, options_json, correct_index, explanation
+          `SELECT id, genre, question, question_key, options_json, correct_index, explanation, created_by
            FROM quiz_questions
            ORDER BY RANDOM()
            LIMIT 200`
@@ -265,17 +265,21 @@ export function registerInteractionCreateHandler({
         continue;
       }
 
-      const isMixedRow = String(row.genre || "") === "mixed" && correctIndex === 0;
-      const answerOptions = isMixedRow
-        ? options.map((v) => String(v || "").slice(0, 120))
-        : [String(options[correctIndex] || "").slice(0, 120)];
+      const normalizedOptions = options.map((v) => String(v || "").slice(0, 120));
+      const isOpenTdbRow = String(row.created_by || "") === "opentdb";
+      const answerOptions = isOpenTdbRow
+        ? [String(normalizedOptions[correctIndex] || "").slice(0, 120)]
+        : normalizedOptions;
+      const displayOptions = isOpenTdbRow ? normalizedOptions : [];
 
       return {
         id,
         question: String(row.question || "").slice(0, 1200),
         questionKey: key,
-        options: answerOptions,
-        correctIndex: 0,
+        options: normalizedOptions,
+        correctIndex,
+        acceptedAnswers: answerOptions,
+        displayOptions,
         explanation: String(row.explanation || "").slice(0, 180),
       };
     }
@@ -290,12 +294,21 @@ export function registerInteractionCreateHandler({
     if (online?.question && online?.answer) {
       const key = normalizeQuestionKey(online.question);
       if (!session.askedQuestionKeys.has(key)) {
+        const onlineOptions = Array.isArray(online.options) && online.options.length
+          ? online.options.map((v) => String(v || "").slice(0, 120)).filter(Boolean)
+          : [String(online.answer || "").slice(0, 120)].filter(Boolean);
+        const onlineCorrectIndex =
+          Number.isInteger(online.correctIndex) &&
+          online.correctIndex >= 0 &&
+          online.correctIndex < onlineOptions.length
+            ? online.correctIndex
+            : Math.max(0, onlineOptions.findIndex((v) => v === online.answer));
         insertQuizQuestion({
           genre: "mixed",
           difficulty: "mixed",
           question: online.question,
-          options: [online.answer, ...(online.aliases || [])],
-          correctIndex: 0,
+          options: onlineOptions,
+          correctIndex: onlineCorrectIndex,
           explanation: online.explanation || "",
           createdBy: "opentdb",
         });
@@ -303,8 +316,10 @@ export function registerInteractionCreateHandler({
           id: null,
           question: online.question,
           questionKey: key,
-          options: [online.answer, ...(online.aliases || [])],
-          correctIndex: 0,
+          options: onlineOptions,
+          correctIndex: onlineCorrectIndex,
+          acceptedAnswers: [String(onlineOptions[onlineCorrectIndex] || "").trim()],
+          displayOptions: onlineOptions,
           explanation: online.explanation || "",
         };
       }
@@ -336,6 +351,8 @@ export function registerInteractionCreateHandler({
         questionKey: key,
         options: [generated.answer, ...generated.aliases],
         correctIndex: 0,
+        acceptedAnswers: [generated.answer, ...generated.aliases],
+        displayOptions: [],
         explanation: generated.explanation,
       };
     }
@@ -409,13 +426,28 @@ export function registerInteractionCreateHandler({
   async function sendOpenQuizQuestion(session) {
     const next = await getNextQuizPayload(session);
     const key = next.questionKey || normalizeQuestionKey(next.question);
+    const acceptedAnswers = Array.isArray(next.acceptedAnswers) && next.acceptedAnswers.length
+      ? next.acceptedAnswers
+      : [String(next.options[next.correctIndex] || "").trim()];
+    const displayOptions = Array.isArray(next.displayOptions) ? next.displayOptions : [];
+    const optionLetters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+    const optionLines = displayOptions
+      .slice(0, optionLetters.length)
+      .map((opt, i) => `${optionLetters[i]}. ${String(opt || "").trim()}`)
+      .filter(Boolean);
+    const correctLetter =
+      displayOptions.length > 0 ? optionLetters[next.correctIndex] || "" : "";
+    const letterAliases = correctLetter
+      ? [correctLetter.toLowerCase(), `${next.correctIndex + 1}`]
+      : [];
 
     session.currentQuestion = next.question;
     session.currentAnswer = String(next.options[next.correctIndex] || "").trim();
     session.currentAnswerKey = normalizeQuizAnswer(session.currentAnswer);
-    session.currentAliasKeys = next.options
+    session.currentAliasKeys = [...acceptedAnswers, ...letterAliases]
       .map((v) => normalizeQuizAnswer(v))
       .filter(Boolean);
+    session.currentOptionLines = optionLines;
     session.lastQuestionKey = key;
     session.roundSolved = false;
     session.firstCorrectUserId = null;
@@ -438,9 +470,19 @@ export function registerInteractionCreateHandler({
     const embed = new EmbedBuilder()
       .setColor(EMBED_COLORS.info)
       .setTitle(`${genreLabel} Quiz - ${difficultyLabel}`)
-      .setDescription(session.currentQuestion.slice(0, 3900))
+      .setDescription(
+        [
+          session.currentQuestion.slice(0, 3200),
+          optionLines.length ? "" : null,
+          optionLines.length ? optionLines.join("\n").slice(0, 600) : null,
+        ]
+          .filter(Boolean)
+          .join("\n")
+      )
       .setFooter({
-        text: "Reply with a word/phrase. First correct gets 1 point. Use !hint for a hint.",
+        text: optionLines.length
+          ? "Reply with option text or letter (A/B/C/D). First correct gets 1 point. Use !hint for a hint."
+          : "Reply with a word/phrase. First correct gets 1 point. Use !hint for a hint.",
       });
 
     await targetChannel.send({ embeds: [embed] });
@@ -526,9 +568,10 @@ export function registerInteractionCreateHandler({
       if (!guess) return;
 
       if (
-        session.prevSolvedAnswerKey &&
+        Array.isArray(session.prevSolvedAnswerKeys) &&
+        session.prevSolvedAnswerKeys.length > 0 &&
         Date.now() < session.prevSolvedExpiresAt &&
-        guess === session.prevSolvedAnswerKey &&
+        session.prevSolvedAnswerKeys.includes(guess) &&
         message.author.id !== session.prevSolvedFirstUserId &&
         !session.prevSolvedAckUsers.has(message.author.id)
       ) {
@@ -547,6 +590,7 @@ export function registerInteractionCreateHandler({
         session.roundSolved = true;
         session.firstCorrectUserId = message.author.id;
         session.prevSolvedAnswerKey = session.currentAnswerKey;
+        session.prevSolvedAnswerKeys = [...new Set(session.currentAliasKeys || [])];
         session.prevSolvedFirstUserId = message.author.id;
         session.prevSolvedAckUsers = new Set();
         session.prevSolvedExpiresAt = Date.now() + QUIZ_ACK_WINDOW_SECONDS * 1000;
@@ -1771,6 +1815,7 @@ export function registerInteractionCreateHandler({
 
           session.roundSolved = true;
           session.prevSolvedAnswerKey = session.currentAnswerKey;
+          session.prevSolvedAnswerKeys = [...new Set(session.currentAliasKeys || [])];
           session.prevSolvedFirstUserId = "";
           session.prevSolvedAckUsers = new Set();
           session.prevSolvedExpiresAt = Date.now() + QUIZ_ACK_WINDOW_SECONDS * 1000;
@@ -1889,10 +1934,12 @@ export function registerInteractionCreateHandler({
             currentAnswer: "",
             currentAnswerKey: "",
             currentAliasKeys: [],
+            currentOptionLines: [],
             roundSolved: false,
             firstCorrectUserId: null,
             correctNoPointUsers: new Set(),
             prevSolvedAnswerKey: "",
+            prevSolvedAnswerKeys: [],
             prevSolvedFirstUserId: "",
             prevSolvedAckUsers: new Set(),
             prevSolvedExpiresAt: 0,

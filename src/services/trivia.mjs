@@ -15,6 +15,15 @@ function normalizeKey(input) {
     .trim();
 }
 
+function shuffleArray(input) {
+  const arr = [...input];
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 export function createTriviaService({
   fetchImpl = globalThis.fetch,
   batchSize = 20,
@@ -40,7 +49,7 @@ export function createTriviaService({
     inflight = (async () => {
       const t = await ensureToken();
       let res = await fetchImpl(
-        `https://opentdb.com/api.php?amount=${batchSize}&type=multiple&token=${encodeURIComponent(t)}&encode=url3986`
+        `https://opentdb.com/api.php?amount=${batchSize}&token=${encodeURIComponent(t)}&encode=url3986`
       );
       if (!res?.ok) throw new Error("OpenTDB fetch failed");
       let data = await res.json();
@@ -51,7 +60,7 @@ export function createTriviaService({
         );
         if (!reset?.ok) throw new Error("OpenTDB token reset failed");
         res = await fetchImpl(
-          `https://opentdb.com/api.php?amount=${batchSize}&type=multiple&token=${encodeURIComponent(t)}&encode=url3986`
+          `https://opentdb.com/api.php?amount=${batchSize}&token=${encodeURIComponent(t)}&encode=url3986`
         );
         if (!res?.ok) throw new Error("OpenTDB fetch failed after reset");
         data = await res.json();
@@ -63,10 +72,17 @@ export function createTriviaService({
           const question = decodeOpenTdbText(r?.question);
           const answer = decodeOpenTdbText(r?.correct_answer);
           if (!question || !answer) return null;
+          const incorrect = Array.isArray(r?.incorrect_answers)
+            ? r.incorrect_answers.map((v) => decodeOpenTdbText(v)).filter(Boolean)
+            : [];
+          const allOptions = shuffleArray([answer, ...incorrect]).slice(0, 4);
+          const correctIndex = Math.max(0, allOptions.findIndex((v) => v === answer));
           return {
             question,
             answer,
             aliases: [],
+            options: allOptions,
+            correctIndex,
             explanation: "",
             source: "Open Trivia DB",
             questionKey: normalizeKey(question),
