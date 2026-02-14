@@ -74,9 +74,9 @@ export function registerInteractionCreateHandler({
   const pendingProfileSetForModal = new Map();
   const activeQuizSessions = new Map(); // guildId -> active quiz session
   const QUIZ_CHANNEL_ID = String(process.env.QUIZ_CHANNEL_ID || "").trim();
-  const QUIZ_INTERVAL_SECONDS = Math.max(
-    3,
-    Math.min(600, Number(process.env.QUIZ_INTERVAL_SECONDS || 20) || 20)
+  const QUIZ_ACK_WINDOW_SECONDS = Math.max(
+    5,
+    Math.min(60, Number(process.env.QUIZ_ACK_WINDOW_SECONDS || 15) || 15)
   );
 
   function cleanupPending(map, maxAgeMs = 20 * 60 * 1000) {
@@ -124,19 +124,19 @@ export function registerInteractionCreateHandler({
     return text;
   }
 
-  async function generateQuizQuestion({ genre, difficulty }) {
-    const genreLabel = QUIZ_GENRE_LABELS[genre] || genre;
+  async function generateQuizQuestion() {
     const resp = await openai.chat.completions.create({
       model: "gpt-4.1-mini",
       messages: [
         {
           role: "system",
           content:
-            "Create one multiple-choice quiz question and return strict JSON only. Keys: question (string), options (array of 4 short strings), correct_index (0-3 integer), explanation (string max 180 chars). No markdown.",
+            "Create one short-answer quiz question and return strict JSON only. Keys: question (string), answer (string, one word or short phrase), aliases (array of strings max 6), explanation (string max 180 chars). No markdown.",
         },
         {
           role: "user",
-          content: `Genre: ${genreLabel}\nDifficulty: ${difficulty}\nOutput JSON now.`,
+          content:
+            "Topic must be mixed/random across history, politics, sports, books, movies, TV, celebrity news, and music.",
         },
       ],
       temperature: 0.9,
@@ -151,32 +151,23 @@ export function registerInteractionCreateHandler({
     }
 
     const question = String(parsed?.question || "").trim();
-    const options = Array.isArray(parsed?.options)
-      ? parsed.options
+    const answer = String(parsed?.answer || "").trim();
+    const aliases = Array.isArray(parsed?.aliases)
+      ? parsed.aliases
           .map((v) => String(v || "").trim())
           .filter(Boolean)
-          .slice(0, 4)
+          .slice(0, 6)
       : [];
-    const correctIndex = Number(parsed?.correct_index);
     const explanation = String(parsed?.explanation || "").trim().slice(0, 180);
 
-    if (
-      !question ||
-      options.length !== 4 ||
-      !Number.isInteger(correctIndex) ||
-      correctIndex < 0 ||
-      correctIndex > 3
-    ) {
+    if (!question || !answer) {
       throw new Error("Quiz generation failed.");
     }
 
-    const dedup = new Set(options.map((v) => v.toLowerCase()));
-    if (dedup.size !== 4) throw new Error("Quiz options must be unique.");
-
     return {
       question: question.slice(0, 1200),
-      options: options.map((v) => v.slice(0, 90)),
-      correctIndex,
+      answer: answer.slice(0, 120),
+      aliases: aliases.map((v) => v.slice(0, 120)),
       explanation,
     };
   }
@@ -189,16 +180,11 @@ export function registerInteractionCreateHandler({
       .trim();
   }
 
-  async function generateUniqueQuizQuestion({
-    genre,
-    difficulty,
-    recentQuestionKeys = [],
-    maxTries = 5,
-  }) {
+  async function generateUniqueQuizQuestion({ recentQuestionKeys = [], maxTries = 5 }) {
     const seen = new Set(recentQuestionKeys.filter(Boolean));
 
     for (let i = 0; i < maxTries; i += 1) {
-      const q = await generateQuizQuestion({ genre, difficulty });
+      const q = await generateQuizQuestion();
       const key = normalizeQuestionKey(q.question);
       if (!seen.has(key)) return q;
     }
@@ -238,13 +224,12 @@ export function registerInteractionCreateHandler({
   function getStoredQuizQuestion(session) {
     const rows = db
       .prepare(
-        `SELECT id, question, question_key, options_json, correct_index, explanation
+        `SELECT id, genre, question, question_key, options_json, correct_index, explanation
          FROM quiz_questions
-         WHERE genre = ? AND difficulty = ?
          ORDER BY RANDOM()
          LIMIT 200`
       )
-      .all(session.genre, session.difficulty);
+      .all();
 
     for (const row of rows) {
       const id = Number(row.id);
@@ -258,19 +243,28 @@ export function registerInteractionCreateHandler({
       } catch {
         options = [];
       }
-      if (!Array.isArray(options) || options.length !== 4) continue;
+      if (!Array.isArray(options) || options.length < 1) continue;
 
       const correctIndex = Number(row.correct_index);
-      if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3) {
+      if (
+        !Number.isInteger(correctIndex) ||
+        correctIndex < 0 ||
+        correctIndex >= options.length
+      ) {
         continue;
       }
+
+      const isMixedRow = String(row.genre || "") === "mixed" && correctIndex === 0;
+      const answerOptions = isMixedRow
+        ? options.map((v) => String(v || "").slice(0, 120))
+        : [String(options[correctIndex] || "").slice(0, 120)];
 
       return {
         id,
         question: String(row.question || "").slice(0, 1200),
         questionKey: key,
-        options: options.map((v) => String(v || "").slice(0, 90)),
-        correctIndex,
+        options: answerOptions,
+        correctIndex: 0,
         explanation: String(row.explanation || "").slice(0, 180),
       };
     }
@@ -284,17 +278,15 @@ export function registerInteractionCreateHandler({
 
     for (let i = 0; i < 10; i += 1) {
       const generated = await generateUniqueQuizQuestion({
-        genre: session.genre,
-        difficulty: session.difficulty,
         recentQuestionKeys: Array.from(session.askedQuestionKeys),
         maxTries: 8,
       });
       const saved = insertQuizQuestion({
-        genre: session.genre,
-        difficulty: session.difficulty,
+        genre: "mixed",
+        difficulty: "mixed",
         question: generated.question,
-        options: generated.options,
-        correctIndex: generated.correctIndex,
+        options: [generated.answer, ...generated.aliases],
+        correctIndex: 0,
         explanation: generated.explanation,
         createdBy: session.startedBy,
       });
@@ -305,8 +297,8 @@ export function registerInteractionCreateHandler({
         id: null,
         question: generated.question,
         questionKey: key,
-        options: generated.options,
-        correctIndex: generated.correctIndex,
+        options: [generated.answer, ...generated.aliases],
+        correctIndex: 0,
         explanation: generated.explanation,
       };
     }
@@ -334,6 +326,43 @@ export function registerInteractionCreateHandler({
     return normalizeQuestionKey(input);
   }
 
+  function levenshteinDistance(a, b) {
+    const s = String(a || "");
+    const t = String(b || "");
+    const m = s.length;
+    const n = t.length;
+    if (!m) return n;
+    if (!n) return m;
+    const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+    for (let i = 0; i <= m; i += 1) dp[i][0] = i;
+    for (let j = 0; j <= n; j += 1) dp[0][j] = j;
+    for (let i = 1; i <= m; i += 1) {
+      for (let j = 1; j <= n; j += 1) {
+        const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+        dp[i][j] = Math.min(
+          dp[i - 1][j] + 1,
+          dp[i][j - 1] + 1,
+          dp[i - 1][j - 1] + cost
+        );
+      }
+    }
+    return dp[m][n];
+  }
+
+  function isGuessCloseEnough(guessKey, answerKeys) {
+    if (!guessKey) return false;
+    for (const ans of answerKeys) {
+      if (!ans) continue;
+      if (guessKey === ans) return true;
+      const gap = Math.abs(guessKey.length - ans.length);
+      if (gap > 2) continue;
+      const dist = levenshteinDistance(guessKey, ans);
+      if (dist <= 1) return true;
+      if (guessKey.length >= 6 && dist <= 2) return true;
+    }
+    return false;
+  }
+
   async function fetchQuizChannel(session) {
     const ch = await client.channels.fetch(session.channelId).catch(() => null);
     if (!ch?.isTextBased()) return null;
@@ -347,6 +376,9 @@ export function registerInteractionCreateHandler({
     session.currentQuestion = next.question;
     session.currentAnswer = String(next.options[next.correctIndex] || "").trim();
     session.currentAnswerKey = normalizeQuizAnswer(session.currentAnswer);
+    session.currentAliasKeys = next.options
+      .map((v) => normalizeQuizAnswer(v))
+      .filter(Boolean);
     session.lastQuestionKey = key;
     session.roundSolved = false;
     session.firstCorrectUserId = null;
@@ -371,7 +403,7 @@ export function registerInteractionCreateHandler({
       .setTitle(`${genreLabel} Quiz - ${difficultyLabel}`)
       .setDescription(session.currentQuestion.slice(0, 3900))
       .setFooter({
-        text: `Reply with a word/phrase. Next round starts ${session.intervalSeconds}s after first correct answer.`,
+        text: "Reply with a word/phrase. First correct gets 1 point. Use !hint for a hint.",
       });
 
     await targetChannel.send({ embeds: [embed] });
@@ -419,12 +451,68 @@ export function registerInteractionCreateHandler({
       if (message.channelId !== session.channelId) return;
       if (!session.currentAnswerKey) return;
 
-      const guess = normalizeQuizAnswer(message.content || "");
-      if (!guess || guess !== session.currentAnswerKey) return;
+      const raw = String(message.content || "").trim();
+      if (!raw) return;
+
+      if (raw.toLowerCase() === "!hint") {
+        if (session.roundSolved || session.hintLock) return;
+        session.hintLock = true;
+        try {
+          const hintResp = await openai.chat.completions.create({
+            model: "gpt-4.1-mini",
+            messages: [
+              {
+                role: "system",
+                content:
+                  "Give one short hint for this quiz question. Do not reveal the exact answer or quote it directly.",
+              },
+              {
+                role: "user",
+                content: `Question: ${session.currentQuestion}\nAnswer: ${session.currentAnswer}`,
+              },
+            ],
+            temperature: 0.6,
+          });
+          const hint =
+            hintResp.choices?.[0]?.message?.content?.trim().slice(0, 240) ||
+            "Think of the most common short answer to this question.";
+          await message.channel.send(`💡 Hint: ${hint}`);
+        } catch {
+          await message.channel.send("💡 Hint: focus on the most common short answer.");
+        } finally {
+          session.hintLock = false;
+        }
+        return;
+      }
+
+      const guess = normalizeQuizAnswer(raw);
+      if (!guess) return;
+
+      if (
+        session.prevSolvedAnswerKey &&
+        Date.now() < session.prevSolvedExpiresAt &&
+        guess === session.prevSolvedAnswerKey &&
+        message.author.id !== session.prevSolvedFirstUserId &&
+        !session.prevSolvedAckUsers.has(message.author.id)
+      ) {
+        session.prevSolvedAckUsers.add(message.author.id);
+        await message.channel.send(
+          `✅ <@${message.author.id}> also correct (no points, first answer already scored).`
+        );
+        return;
+      }
+
+      if (!isGuessCloseEnough(guess, session.currentAliasKeys || [session.currentAnswerKey])) {
+        return;
+      }
 
       if (!session.roundSolved) {
         session.roundSolved = true;
         session.firstCorrectUserId = message.author.id;
+        session.prevSolvedAnswerKey = session.currentAnswerKey;
+        session.prevSolvedFirstUserId = message.author.id;
+        session.prevSolvedAckUsers = new Set();
+        session.prevSolvedExpiresAt = Date.now() + QUIZ_ACK_WINDOW_SECONDS * 1000;
         recordQuizAttempt({
           guildId: message.guildId,
           userId: message.author.id,
@@ -432,7 +520,7 @@ export function registerInteractionCreateHandler({
         });
 
         await message.channel.send(
-          `✅ <@${message.author.id}> is first and gets **+1 point**.\nNext question in ${session.intervalSeconds}s.`
+          `✅ <@${message.author.id}> is first and gets **+1 point**.`
         );
         scheduleNextOpenQuizQuestion(session);
         return;
@@ -1611,6 +1699,59 @@ export function registerInteractionCreateHandler({
           return;
         }
 
+        if (sub === "skip") {
+          const session = activeQuizSessions.get(interaction.guildId);
+          if (!session || !session.active) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Quiz",
+                  description: "No active quiz in this server.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const isOwner = interaction.user.id === OWNER_ID;
+          const isStarter = interaction.user.id === session.startedBy;
+          const isAdmin = Boolean(interaction.memberPermissions?.has("ManageGuild"));
+          if (!isOwner && !isStarter && !isAdmin) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Quiz",
+                  description: "Only an admin, the starter, or Snooty can skip.",
+                  tone: "error",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          session.roundSolved = true;
+          session.prevSolvedAnswerKey = session.currentAnswerKey;
+          session.prevSolvedFirstUserId = "";
+          session.prevSolvedAckUsers = new Set();
+          session.prevSolvedExpiresAt = Date.now() + QUIZ_ACK_WINDOW_SECONDS * 1000;
+
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Quiz Skipped",
+                description: `Correct answer: **${session.currentAnswer}**`,
+                tone: "info",
+              }),
+            ],
+            ephemeral: false,
+          });
+          scheduleNextOpenQuizQuestion(session);
+          return;
+        }
+
         if (sub === "start") {
           const existing = activeQuizSessions.get(interaction.guildId);
           if (existing && existing.active) {
@@ -1645,26 +1786,30 @@ export function registerInteractionCreateHandler({
 
           await safeDefer(interaction, { ephemeral: true });
 
-          const genre = interaction.options.getString("genre", true);
-          const difficulty = interaction.options.getString("difficulty", true);
           const channelId = QUIZ_CHANNEL_ID || interaction.channelId;
 
           const session = {
             guildId: interaction.guildId,
             channelId,
             startedBy: interaction.user.id,
-            genre,
-            difficulty,
-            intervalSeconds: QUIZ_INTERVAL_SECONDS,
+            genre: "mixed",
+            difficulty: "mixed",
+            intervalSeconds: 0,
             recentQuestionKeys: [],
             askedQuestionKeys: new Set(),
             usedQuestionIds: new Set(),
             currentQuestion: "",
             currentAnswer: "",
             currentAnswerKey: "",
+            currentAliasKeys: [],
             roundSolved: false,
             firstCorrectUserId: null,
             correctNoPointUsers: new Set(),
+            prevSolvedAnswerKey: "",
+            prevSolvedFirstUserId: "",
+            prevSolvedAckUsers: new Set(),
+            prevSolvedExpiresAt: 0,
+            hintLock: false,
             scheduledNext: false,
             nextQuestionTimeout: null,
             active: true,
@@ -1693,9 +1838,9 @@ export function registerInteractionCreateHandler({
                 title: "Quiz Started",
                 description: [
                   `Channel: <#${channelId}>`,
-                  `Genre: ${QUIZ_GENRE_LABELS[genre] || genre}`,
-                  `Difficulty: ${difficulty}`,
-                  `Interval: ${QUIZ_INTERVAL_SECONDS}s`,
+                  "Mode: mixed topics + mixed difficulty",
+                  "Answer type: word/short phrase",
+                  "Use `!hint` in quiz channel for hints",
                   QUIZ_CHANNEL_ID && interaction.channelId !== channelId
                     ? `Configured quiz channel override is active via \`QUIZ_CHANNEL_ID\`.`
                     : "",
