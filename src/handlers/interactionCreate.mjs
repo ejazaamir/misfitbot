@@ -77,7 +77,9 @@ export function registerInteractionCreateHandler({
   const lastStartQuestionKeyByGuild = new Map(); // guildId -> last opening question key
   const quizLeaderRoleOwnerByGuild = new Map(); // guildId -> current leader user id
   const QUIZ_CHANNEL_ID = String(process.env.QUIZ_CHANNEL_ID || "").trim();
-  const QUIZ_LEADER_ROLE_ID = String(process.env.QUIZ_LEADER_ROLE_ID || "").trim();
+  const QUIZ_LEADER_ROLE_ID = String(process.env.QUIZ_LEADER_ROLE_ID || "")
+    .trim()
+    .replace(/\D/g, "");
   const QUIZ_ACK_WINDOW_SECONDS = Math.max(
     5,
     Math.min(60, Number(process.env.QUIZ_ACK_WINDOW_SECONDS || 15) || 15)
@@ -404,27 +406,39 @@ export function registerInteractionCreateHandler({
 
     const guild = client.guilds.cache.get(guildId) || (await client.guilds.fetch(guildId).catch(() => null));
     if (!guild) return;
-    const role = await guild.roles.fetch(QUIZ_LEADER_ROLE_ID).catch(() => null);
-    if (!role) return;
+    const role = await guild.roles.fetch(QUIZ_LEADER_ROLE_ID).catch((err) => {
+      console.warn("Quiz leader role fetch failed:", err?.message || err);
+      return null;
+    });
+    if (!role) {
+      console.warn(`Quiz leader role not found for guild ${guildId}. Check QUIZ_LEADER_ROLE_ID.`);
+      return;
+    }
 
     // First sync after restart: normalize all existing holders before assigning new winner.
     if (!oldLeaderId) {
       await guild.members.fetch().catch(() => null);
       const holders = role.members.filter((m) => newLeaderId ? m.id !== newLeaderId : true);
       for (const member of holders.values()) {
-        await member.roles.remove(role).catch(() => {});
+        await member.roles.remove(role).catch((err) => {
+          console.warn(`Quiz leader role remove failed for ${member.id}:`, err?.message || err);
+        });
       }
     } else if (oldLeaderId !== newLeaderId) {
       const oldMember = await guild.members.fetch(oldLeaderId).catch(() => null);
       if (oldMember?.roles?.cache?.has(role.id)) {
-        await oldMember.roles.remove(role).catch(() => {});
+        await oldMember.roles.remove(role).catch((err) => {
+          console.warn(`Quiz leader role remove failed for ${oldLeaderId}:`, err?.message || err);
+        });
       }
     }
 
     if (newLeaderId) {
       const newMember = await guild.members.fetch(newLeaderId).catch(() => null);
       if (newMember && !newMember.roles.cache.has(role.id)) {
-        await newMember.roles.add(role).catch(() => {});
+        await newMember.roles.add(role).catch((err) => {
+          console.warn(`Quiz leader role add failed for ${newLeaderId}:`, err?.message || err);
+        });
       }
       quizLeaderRoleOwnerByGuild.set(guildId, newLeaderId);
       return;
@@ -1762,6 +1776,7 @@ export function registerInteractionCreateHandler({
 
         if (sub === "leaderboard") {
           await safeDefer(interaction);
+          await syncQuizLeaderRole(interaction.guildId).catch(() => {});
           let limit = interaction.options.getInteger("limit") ?? 10;
           if (limit < 3) limit = 3;
           if (limit > 20) limit = 20;
