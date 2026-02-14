@@ -75,10 +75,16 @@ export function registerInteractionCreateHandler({
   const pendingProfileSetForModal = new Map();
   const activeQuizSessions = new Map(); // guildId -> active quiz session
   const lastStartQuestionKeyByGuild = new Map(); // guildId -> last opening question key
+  const quizLeaderRoleOwnerByGuild = new Map(); // guildId -> current leader user id
   const QUIZ_CHANNEL_ID = String(process.env.QUIZ_CHANNEL_ID || "").trim();
+  const QUIZ_LEADER_ROLE_ID = String(process.env.QUIZ_LEADER_ROLE_ID || "").trim();
   const QUIZ_ACK_WINDOW_SECONDS = Math.max(
     5,
     Math.min(60, Number(process.env.QUIZ_ACK_WINDOW_SECONDS || 15) || 15)
+  );
+  const QUIZ_NEXT_DELAY_SECONDS = Math.max(
+    0,
+    Math.min(30, Number(process.env.QUIZ_NEXT_DELAY_SECONDS || 5) || 5)
   );
   const QUIZ_OPEN_ANSWER_PERCENT = Math.max(
     0,
@@ -380,7 +386,54 @@ export function registerInteractionCreateHandler({
     throw new Error("No unique question available for this session.");
   }
 
-  function recordQuizAttempt({ guildId, userId, pointsAwarded }) {
+  async function syncQuizLeaderRole(guildId) {
+    if (!QUIZ_LEADER_ROLE_ID || !guildId) return;
+
+    const top = db
+      .prepare(
+        `SELECT user_id
+         FROM quiz_scores
+         WHERE guild_id = ?
+         ORDER BY points DESC, correct_answers DESC, total_attempts ASC
+         LIMIT 1`
+      )
+      .get(guildId);
+    const newLeaderId = String(top?.user_id || "");
+    const oldLeaderId = String(quizLeaderRoleOwnerByGuild.get(guildId) || "");
+    if (newLeaderId && oldLeaderId && newLeaderId === oldLeaderId) return;
+
+    const guild = client.guilds.cache.get(guildId) || (await client.guilds.fetch(guildId).catch(() => null));
+    if (!guild) return;
+    const role = await guild.roles.fetch(QUIZ_LEADER_ROLE_ID).catch(() => null);
+    if (!role) return;
+
+    // First sync after restart: normalize all existing holders before assigning new winner.
+    if (!oldLeaderId) {
+      await guild.members.fetch().catch(() => null);
+      const holders = role.members.filter((m) => newLeaderId ? m.id !== newLeaderId : true);
+      for (const member of holders.values()) {
+        await member.roles.remove(role).catch(() => {});
+      }
+    } else if (oldLeaderId !== newLeaderId) {
+      const oldMember = await guild.members.fetch(oldLeaderId).catch(() => null);
+      if (oldMember?.roles?.cache?.has(role.id)) {
+        await oldMember.roles.remove(role).catch(() => {});
+      }
+    }
+
+    if (newLeaderId) {
+      const newMember = await guild.members.fetch(newLeaderId).catch(() => null);
+      if (newMember && !newMember.roles.cache.has(role.id)) {
+        await newMember.roles.add(role).catch(() => {});
+      }
+      quizLeaderRoleOwnerByGuild.set(guildId, newLeaderId);
+      return;
+    }
+
+    quizLeaderRoleOwnerByGuild.delete(guildId);
+  }
+
+  async function recordQuizAttempt({ guildId, userId, pointsAwarded }) {
     const points = Math.max(0, Number(pointsAwarded) || 0);
     const correctDelta = points > 0 ? 1 : 0;
     db.prepare(`
@@ -394,6 +447,7 @@ export function registerInteractionCreateHandler({
         total_attempts = total_attempts + 1,
         updated_at = strftime('%s','now')
     `).run(guildId, userId, points, correctDelta);
+    await syncQuizLeaderRole(guildId).catch(() => {});
   }
 
   function normalizeQuizAnswer(input) {
@@ -614,7 +668,7 @@ export function registerInteractionCreateHandler({
         session.prevSolvedFirstUserId = message.author.id;
         session.prevSolvedAckUsers = new Set();
         session.prevSolvedExpiresAt = Date.now() + QUIZ_ACK_WINDOW_SECONDS * 1000;
-        recordQuizAttempt({
+        await recordQuizAttempt({
           guildId: message.guildId,
           userId: message.author.id,
           pointsAwarded: 1,
@@ -1877,6 +1931,7 @@ export function registerInteractionCreateHandler({
               .prepare(`SELECT COUNT(*) AS c FROM quiz_scores WHERE guild_id = ?`)
               .get(interaction.guildId)?.c || 0;
             db.prepare(`DELETE FROM quiz_scores WHERE guild_id = ?`).run(interaction.guildId);
+            await syncQuizLeaderRole(interaction.guildId).catch(() => {});
             await interaction.editReply({
               embeds: [
                 statusEmbed({
@@ -1946,7 +2001,7 @@ export function registerInteractionCreateHandler({
             startedBy: interaction.user.id,
             genre: "mixed",
             difficulty: "mixed",
-            intervalSeconds: 0,
+            intervalSeconds: QUIZ_NEXT_DELAY_SECONDS,
             recentQuestionKeys: seedRecent,
             askedQuestionKeys: new Set(seedRecent),
             usedQuestionIds: new Set(),
@@ -2022,6 +2077,7 @@ export function registerInteractionCreateHandler({
                   `Channel: <#${channelId}>`,
                   "Mode: mixed topics + mixed difficulty",
                   "Answer type: word/short phrase",
+                  `Next question delay: ${session.intervalSeconds}s`,
                   "Use `!hint` in quiz channel for hints",
                   QUIZ_CHANNEL_ID && interaction.channelId !== channelId
                     ? `Configured quiz channel override is active via \`QUIZ_CHANNEL_ID\`.`
