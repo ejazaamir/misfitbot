@@ -281,7 +281,7 @@ export function getCommands({ ApplicationCommandType }) {
             {
               type: 4,
               name: "count",
-              description: "Questions per selected combo (1-20).",
+              description: "Questions per selected combo (1-200).",
               required: true,
             },
           ],
@@ -789,7 +789,7 @@ export function getHelpText() {
     "• `/quiz start genre:<...> difficulty:<easy|medium|hard> [seconds]`",
     "• `/quiz leaderboard [limit]`",
     "• `/quiz inventory`",
-    "• `/quiz seed genre:<...|__all> difficulty:<...|__all> count:<1-20>` (owner)",
+    "• `/quiz seed genre:<...|__all> difficulty:<...|__all> count:<1-200>` (owner)",
     "• `/quiz stop`",
     "• `/mbti start` / `/mbti result` / `/mbti reset [user]`",
     "• Beautify styles: box, double_box, banner, wave, glitch, spaced, tinycaps, bubble, leet, shadow, matrix, staircase, framed_quote, divider, code",

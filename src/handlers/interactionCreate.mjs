@@ -1777,7 +1777,7 @@ export function registerInteractionCreateHandler({
           const difficultyArg = interaction.options.getString("difficulty", true);
           let count = interaction.options.getInteger("count", true);
           if (count < 1) count = 1;
-          if (count > 20) count = 20;
+          if (count > 200) count = 200;
 
           const genres =
             genreArg === "__all" ? Object.keys(QUIZ_GENRE_LABELS) : [genreArg];
@@ -1790,13 +1790,13 @@ export function registerInteractionCreateHandler({
           }
 
           const totalTarget = combos.length * count;
-          if (totalTarget > 120) {
+          if (totalTarget > 2000) {
             await interaction.editReply({
               embeds: [
                 statusEmbed({
                   title: "Seed Too Large",
                   description:
-                    `Requested ${totalTarget} questions. Max per run is 120. ` +
+                    `Requested ${totalTarget} questions. Max per run is 2000. ` +
                     "Reduce count or avoid selecting all genres+difficulties at once.",
                   tone: "warn",
                 }),
@@ -1808,6 +1808,28 @@ export function registerInteractionCreateHandler({
           let inserted = 0;
           let skipped = 0;
           let failed = 0;
+          let processed = 0;
+          let lastProgressAt = Date.now();
+
+          const renderProgress = () => {
+            return [
+              `Requested: ${totalTarget}`,
+              `Processed: ${processed}/${totalTarget}`,
+              `Inserted: ${inserted}`,
+              `Skipped duplicates: ${skipped}`,
+              `Failed: ${failed}`,
+            ].join("\n");
+          };
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Quiz Seeding In Progress",
+                description: renderProgress(),
+                tone: "info",
+              }),
+            ],
+          });
 
           for (const combo of combos) {
             const existing = new Set(
@@ -1839,6 +1861,25 @@ export function registerInteractionCreateHandler({
                 }
               } catch {
                 failed += 1;
+              } finally {
+                processed += 1;
+
+                const shouldUpdate =
+                  processed === totalTarget ||
+                  processed % 20 === 0 ||
+                  Date.now() - lastProgressAt > 4000;
+                if (shouldUpdate) {
+                  lastProgressAt = Date.now();
+                  await interaction.editReply({
+                    embeds: [
+                      statusEmbed({
+                        title: "Quiz Seeding In Progress",
+                        description: renderProgress(),
+                        tone: "info",
+                      }),
+                    ],
+                  });
+                }
               }
             }
           }
