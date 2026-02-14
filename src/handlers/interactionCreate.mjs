@@ -244,16 +244,14 @@ export function registerInteractionCreateHandler({
     maxTries = 5,
   }) {
     const seen = new Set(recentQuestionKeys.filter(Boolean));
-    let fallback = null;
 
     for (let i = 0; i < maxTries; i += 1) {
       const q = await generateQuizQuestion({ genre, difficulty });
       const key = normalizeQuestionKey(q.question);
-      if (!fallback) fallback = q;
       if (!seen.has(key)) return q;
     }
 
-    return fallback || (await generateQuizQuestion({ genre, difficulty }));
+    throw new Error("Could not generate a unique quiz question.");
   }
 
   function insertQuizQuestion({
@@ -321,8 +319,8 @@ export function registerInteractionCreateHandler({
     for (const row of rows) {
       const id = Number(row.id);
       if (session.usedQuestionIds.has(id)) continue;
-      const key = String(row.question_key || "");
-      if (session.recentQuestionKeys.includes(key)) continue;
+      const key = String(row.question_key || normalizeQuestionKey(row.question || ""));
+      if (session.askedQuestionKeys.has(key)) continue;
 
       let options = [];
       try {
@@ -340,7 +338,7 @@ export function registerInteractionCreateHandler({
       return {
         id,
         question: String(row.question || "").slice(0, 1200),
-        questionKey: key || normalizeQuestionKey(row.question || ""),
+        questionKey: key,
         options: options.map((v) => String(v || "").slice(0, 90)),
         correctIndex,
         explanation: String(row.explanation || "").slice(0, 180),
@@ -354,29 +352,36 @@ export function registerInteractionCreateHandler({
     const stored = getStoredQuizQuestion(session);
     if (stored) return stored;
 
-    const generated = await generateUniqueQuizQuestion({
-      genre: session.genre,
-      difficulty: session.difficulty,
-      recentQuestionKeys: session.recentQuestionKeys,
-    });
-    const saved = insertQuizQuestion({
-      genre: session.genre,
-      difficulty: session.difficulty,
-      question: generated.question,
-      options: generated.options,
-      correctIndex: generated.correctIndex,
-      explanation: generated.explanation,
-      createdBy: session.startedBy,
-    });
+    for (let i = 0; i < 10; i += 1) {
+      const generated = await generateUniqueQuizQuestion({
+        genre: session.genre,
+        difficulty: session.difficulty,
+        recentQuestionKeys: Array.from(session.askedQuestionKeys),
+        maxTries: 8,
+      });
+      const saved = insertQuizQuestion({
+        genre: session.genre,
+        difficulty: session.difficulty,
+        question: generated.question,
+        options: generated.options,
+        correctIndex: generated.correctIndex,
+        explanation: generated.explanation,
+        createdBy: session.startedBy,
+      });
+      const key = saved.questionKey || normalizeQuestionKey(generated.question);
+      if (session.askedQuestionKeys.has(key)) continue;
 
-    return {
-      id: null,
-      question: generated.question,
-      questionKey: saved.questionKey,
-      options: generated.options,
-      correctIndex: generated.correctIndex,
-      explanation: generated.explanation,
-    };
+      return {
+        id: null,
+        question: generated.question,
+        questionKey: key,
+        options: generated.options,
+        correctIndex: generated.correctIndex,
+        explanation: generated.explanation,
+      };
+    }
+
+    throw new Error("No unique question available for this session.");
   }
 
   function recordQuizAttempt({ guildId, userId, pointsAwarded }) {
@@ -474,6 +479,7 @@ export function registerInteractionCreateHandler({
     if (Number.isInteger(next.id)) {
       session.usedQuestionIds.add(next.id);
     }
+    session.askedQuestionKeys.add(key);
 
     session.question = next.question;
     session.options = next.options;
@@ -1948,6 +1954,7 @@ export function registerInteractionCreateHandler({
             correctIndex: 0,
             explanation: "",
             recentQuestionKeys: [],
+            askedQuestionKeys: new Set(),
             usedQuestionIds: new Set(),
             endsAt,
             questionNumber: 1,
@@ -1964,6 +1971,7 @@ export function registerInteractionCreateHandler({
           session.correctIndex = first.correctIndex;
           session.explanation = first.explanation;
           session.recentQuestionKeys = [firstKey];
+          session.askedQuestionKeys = new Set([firstKey]);
           if (Number.isInteger(first.id)) session.usedQuestionIds.add(first.id);
 
           activeQuizSessions.set(interaction.channelId, session);
