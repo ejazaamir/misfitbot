@@ -11,6 +11,13 @@ export function registerMessageCreateHandler({
   extractAudioAttachmentsFromMessage,
   setReplyContext,
 }) {
+  const disabledReplyChannelIds = new Set(
+    String(process.env.DISABLE_REPLY_CHANNEL_IDS || "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean)
+  );
+
   client.on("messageCreate", async (message) => {
     try {
       if (message.author.bot) return;
@@ -22,6 +29,9 @@ export function registerMessageCreateHandler({
           message.reference.messageId
         );
       }
+
+      // In blocked channels, ignore normal reply/mention behavior.
+      if (disabledReplyChannelIds.has(message.channel.id)) return;
 
       const raw = message.content.toLowerCase().trim();
       if (/^bruh+h*$/.test(raw)) {
