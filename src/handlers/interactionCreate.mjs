@@ -408,6 +408,9 @@ export function registerInteractionCreateHandler({
     for (const ans of answerKeys) {
       if (!ans) continue;
       if (guessKey === ans) return true;
+      // Do not fuzzy-match short tokens (like A/B/C/D or 1/2/3/4).
+      // They must be exact to avoid false positives.
+      if (guessKey.length <= 2 || ans.length <= 2) continue;
       const gap = Math.abs(guessKey.length - ans.length);
       if (gap > 2) continue;
       const dist = levenshteinDistance(guessKey, ans);

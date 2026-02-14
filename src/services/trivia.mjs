@@ -46,11 +46,16 @@ export function createTriviaService({
   async function refill() {
     if (inflight) return inflight;
 
-    inflight = (async () => {
+    async function fetchBatch({ amount, type = "" }) {
       const t = await ensureToken();
-      let res = await fetchImpl(
-        `https://opentdb.com/api.php?amount=${batchSize}&token=${encodeURIComponent(t)}&encode=url3986`
-      );
+      const qs = new URLSearchParams({
+        amount: String(amount),
+        token: t,
+        encode: "url3986",
+      });
+      if (type) qs.set("type", type);
+
+      let res = await fetchImpl(`https://opentdb.com/api.php?${qs.toString()}`);
       if (!res?.ok) throw new Error("OpenTDB fetch failed");
       let data = await res.json();
 
@@ -59,14 +64,25 @@ export function createTriviaService({
           `https://opentdb.com/api_token.php?command=reset&token=${encodeURIComponent(t)}`
         );
         if (!reset?.ok) throw new Error("OpenTDB token reset failed");
-        res = await fetchImpl(
-          `https://opentdb.com/api.php?amount=${batchSize}&token=${encodeURIComponent(t)}&encode=url3986`
-        );
+        res = await fetchImpl(`https://opentdb.com/api.php?${qs.toString()}`);
         if (!res?.ok) throw new Error("OpenTDB fetch failed after reset");
         data = await res.json();
       }
 
-      const results = Array.isArray(data?.results) ? data.results : [];
+      return Array.isArray(data?.results) ? data.results : [];
+    }
+
+    inflight = (async () => {
+      const results = await fetchBatch({ amount: batchSize });
+      const booleanInPrimary = results.some((r) => String(r?.type || "") === "boolean");
+      if (!booleanInPrimary) {
+        const boolResults = await fetchBatch({
+          amount: Math.max(2, Math.floor(batchSize / 4)),
+          type: "boolean",
+        });
+        results.push(...boolResults);
+      }
+
       const mapped = results
         .map((r) => {
           const question = decodeOpenTdbText(r?.question);
@@ -85,6 +101,7 @@ export function createTriviaService({
             correctIndex,
             explanation: "",
             source: "Open Trivia DB",
+            questionType: String(r?.type || "").toLowerCase(),
             questionKey: normalizeKey(question),
           };
         })
