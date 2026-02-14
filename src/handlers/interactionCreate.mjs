@@ -80,6 +80,10 @@ export function registerInteractionCreateHandler({
     5,
     Math.min(60, Number(process.env.QUIZ_ACK_WINDOW_SECONDS || 15) || 15)
   );
+  const QUIZ_OPEN_ANSWER_PERCENT = Math.max(
+    0,
+    Math.min(100, Number(process.env.QUIZ_OPEN_ANSWER_PERCENT || 35) || 35)
+  );
 
   function cleanupPending(map, maxAgeMs = 20 * 60 * 1000) {
     const now = Date.now();
@@ -288,74 +292,90 @@ export function registerInteractionCreateHandler({
   }
 
   async function getNextQuizPayload(session) {
-    const online = await trivia?.getQuestion?.({
-      avoidQuestionKeys: Array.from(session.askedQuestionKeys),
-    });
-    if (online?.question && online?.answer) {
-      const key = normalizeQuestionKey(online.question);
-      if (!session.askedQuestionKeys.has(key)) {
-        const onlineOptions = Array.isArray(online.options) && online.options.length
-          ? online.options.map((v) => String(v || "").slice(0, 120)).filter(Boolean)
-          : [String(online.answer || "").slice(0, 120)].filter(Boolean);
-        const onlineCorrectIndex =
-          Number.isInteger(online.correctIndex) &&
-          online.correctIndex >= 0 &&
-          online.correctIndex < onlineOptions.length
-            ? online.correctIndex
-            : Math.max(0, onlineOptions.findIndex((v) => v === online.answer));
-        insertQuizQuestion({
+    async function generateOpenPayload() {
+      for (let i = 0; i < 10; i += 1) {
+        const generated = await generateUniqueQuizQuestion({
+          recentQuestionKeys: Array.from(session.askedQuestionKeys),
+          maxTries: 8,
+        });
+        const saved = insertQuizQuestion({
           genre: "mixed",
           difficulty: "mixed",
-          question: online.question,
-          options: onlineOptions,
-          correctIndex: onlineCorrectIndex,
-          explanation: online.explanation || "",
-          createdBy: "opentdb",
+          question: generated.question,
+          options: [generated.answer, ...generated.aliases],
+          correctIndex: 0,
+          explanation: generated.explanation,
+          createdBy: session.startedBy,
         });
+        const key = saved.questionKey || normalizeQuestionKey(generated.question);
+        if (session.askedQuestionKeys.has(key)) continue;
+
         return {
           id: null,
-          question: online.question,
+          question: generated.question,
           questionKey: key,
-          options: onlineOptions,
-          correctIndex: onlineCorrectIndex,
-          acceptedAnswers: [String(onlineOptions[onlineCorrectIndex] || "").trim()],
-          displayOptions: onlineOptions,
-          explanation: online.explanation || "",
+          options: [generated.answer, ...generated.aliases],
+          correctIndex: 0,
+          acceptedAnswers: [generated.answer, ...generated.aliases],
+          displayOptions: [],
+          explanation: generated.explanation,
         };
       }
+      return null;
     }
+
+    async function getOnlinePayload() {
+      const online = await trivia?.getQuestion?.({
+        avoidQuestionKeys: Array.from(session.askedQuestionKeys),
+      });
+      if (!online?.question || !online?.answer) return null;
+      const key = normalizeQuestionKey(online.question);
+      if (session.askedQuestionKeys.has(key)) return null;
+
+      const onlineOptions = Array.isArray(online.options) && online.options.length
+        ? online.options.map((v) => String(v || "").slice(0, 120)).filter(Boolean)
+        : [String(online.answer || "").slice(0, 120)].filter(Boolean);
+      const onlineCorrectIndex =
+        Number.isInteger(online.correctIndex) &&
+        online.correctIndex >= 0 &&
+        online.correctIndex < onlineOptions.length
+          ? online.correctIndex
+          : Math.max(0, onlineOptions.findIndex((v) => v === online.answer));
+      insertQuizQuestion({
+        genre: "mixed",
+        difficulty: "mixed",
+        question: online.question,
+        options: onlineOptions,
+        correctIndex: onlineCorrectIndex,
+        explanation: online.explanation || "",
+        createdBy: "opentdb",
+      });
+      return {
+        id: null,
+        question: online.question,
+        questionKey: key,
+        options: onlineOptions,
+        correctIndex: onlineCorrectIndex,
+        acceptedAnswers: [String(onlineOptions[onlineCorrectIndex] || "").trim()],
+        displayOptions: onlineOptions,
+        explanation: online.explanation || "",
+      };
+    }
+
+    const preferOpen = Math.random() * 100 < QUIZ_OPEN_ANSWER_PERCENT;
+    if (preferOpen) {
+      const openPayload = await generateOpenPayload();
+      if (openPayload) return openPayload;
+    }
+
+    const onlinePayload = await getOnlinePayload();
+    if (onlinePayload) return onlinePayload;
 
     const stored = getStoredQuizQuestion(session);
     if (stored) return stored;
 
-    for (let i = 0; i < 10; i += 1) {
-      const generated = await generateUniqueQuizQuestion({
-        recentQuestionKeys: Array.from(session.askedQuestionKeys),
-        maxTries: 8,
-      });
-      const saved = insertQuizQuestion({
-        genre: "mixed",
-        difficulty: "mixed",
-        question: generated.question,
-        options: [generated.answer, ...generated.aliases],
-        correctIndex: 0,
-        explanation: generated.explanation,
-        createdBy: session.startedBy,
-      });
-      const key = saved.questionKey || normalizeQuestionKey(generated.question);
-      if (session.askedQuestionKeys.has(key)) continue;
-
-      return {
-        id: null,
-        question: generated.question,
-        questionKey: key,
-        options: [generated.answer, ...generated.aliases],
-        correctIndex: 0,
-        acceptedAnswers: [generated.answer, ...generated.aliases],
-        displayOptions: [],
-        explanation: generated.explanation,
-      };
-    }
+    const openPayload = await generateOpenPayload();
+    if (openPayload) return openPayload;
 
     throw new Error("No unique question available for this session.");
   }
@@ -467,12 +487,9 @@ export function registerInteractionCreateHandler({
     const targetChannel = await fetchQuizChannel(session);
     if (!targetChannel) throw new Error("Quiz channel unavailable");
 
-    const genreLabel = QUIZ_GENRE_LABELS[session.genre] || session.genre;
-    const difficultyLabel =
-      session.difficulty.charAt(0).toUpperCase() + session.difficulty.slice(1);
     const embed = new EmbedBuilder()
       .setColor(EMBED_COLORS.info)
-      .setTitle(`${genreLabel} Quiz - ${difficultyLabel}`)
+      .setTitle("Midnight Misfit Quiz")
       .setDescription(
         [
           session.currentQuestion.slice(0, 3200),
@@ -1719,7 +1736,7 @@ export function registerInteractionCreateHandler({
           }
 
           const lines = rows.map((r, i) => {
-            return `${i + 1}. <@${r.user_id}> - **${r.points}** pts (${r.correct_answers}/${r.total_attempts} correct)`;
+            return `${i + 1}. <@${r.user_id}> - **${r.points}** pts`;
           });
 
           await interaction.editReply({
