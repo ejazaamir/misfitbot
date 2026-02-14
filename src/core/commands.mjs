@@ -178,12 +178,12 @@ export function getCommands({ ApplicationCommandType }) {
     },
     {
       name: "quiz",
-      description: "Start a timed multiple-choice quiz and view leaderboard.",
+      description: "Run continuous open-answer quiz rounds in the quiz channel.",
       options: [
         {
           type: 1,
           name: "start",
-          description: "Start a public timed 4-option quiz in this channel.",
+          description: "Start quiz rounds (first correct answer gets 1 point).",
           options: [
             {
               type: 3,
@@ -207,19 +207,13 @@ export function getCommands({ ApplicationCommandType }) {
             {
               type: 3,
               name: "difficulty",
-              description: "Point value: easy=1, medium=2, hard=3",
+              description: "Question difficulty",
               required: true,
               choices: [
-                { name: "Easy (1 point)", value: "easy" },
-                { name: "Medium (2 points)", value: "medium" },
-                { name: "Hard (3 points)", value: "hard" },
+                { name: "Easy", value: "easy" },
+                { name: "Medium", value: "medium" },
+                { name: "Hard", value: "hard" },
               ],
-            },
-            {
-              type: 4,
-              name: "seconds",
-              description: "Timer in seconds (15-180). Default 45.",
-              required: false,
             },
           ],
         },
@@ -238,58 +232,8 @@ export function getCommands({ ApplicationCommandType }) {
         },
         {
           type: 1,
-          name: "inventory",
-          description: "Show stored quiz question counts by genre/difficulty.",
-        },
-        {
-          type: 1,
-          name: "seed",
-          description: "Owner only: generate and store quiz questions with AI.",
-          options: [
-            {
-              type: 3,
-              name: "genre",
-              description: "Genre to seed",
-              required: true,
-              choices: [
-                { name: "All Genres", value: "__all" },
-                { name: "History", value: "history" },
-                { name: "Politics", value: "politics" },
-                { name: "Sports", value: "sports" },
-                { name: "Harry Potter", value: "harry_potter" },
-                { name: "Game of Thrones", value: "game_of_thrones" },
-                { name: "Lord of the Rings", value: "lord_of_the_rings" },
-                { name: "Movies", value: "movies" },
-                { name: "TV Show", value: "tv_show" },
-                { name: "Celebrity News", value: "celebrity_news" },
-                { name: "Music", value: "music" },
-                { name: "Random", value: "random" },
-              ],
-            },
-            {
-              type: 3,
-              name: "difficulty",
-              description: "Difficulty to seed",
-              required: true,
-              choices: [
-                { name: "All Difficulties", value: "__all" },
-                { name: "Easy", value: "easy" },
-                { name: "Medium", value: "medium" },
-                { name: "Hard", value: "hard" },
-              ],
-            },
-            {
-              type: 4,
-              name: "count",
-              description: "Questions per selected combo (1-200).",
-              required: true,
-            },
-          ],
-        },
-        {
-          type: 1,
           name: "stop",
-          description: "Stop the active quiz in this channel (starter or owner).",
+          description: "Stop the active quiz (admin/owner/starter).",
         },
       ],
     },
@@ -786,10 +730,8 @@ export function getHelpText() {
     "• `/summarizechannel count:<1-100>`",
     "• `/voicenote text:<text> [voice]`",
     "• `/beautify [text] [message:<link>] [style]`",
-    "• `/quiz start genre:<...> difficulty:<easy|medium|hard> [seconds]`",
+    "• `/quiz start genre:<...> difficulty:<easy|medium|hard>`",
     "• `/quiz leaderboard [limit]`",
-    "• `/quiz inventory`",
-    "• `/quiz seed genre:<...|__all> difficulty:<...|__all> count:<1-200>` (owner)",
     "• `/quiz stop`",
     "• `/mbti start` / `/mbti result` / `/mbti reset [user]`",
     "• Beautify styles: box, double_box, banner, wave, glitch, spaced, tinycaps, bubble, leet, shadow, matrix, staircase, framed_quote, divider, code",
@@ -804,19 +746,26 @@ export function getHelpText() {
 
 export async function registerCommands(client, commands) {
   try {
-    // Cleanup step: remove legacy guild-scoped commands so global-only
-    // registration does not appear duplicated in clients.
-    for (const guild of client.guilds.cache.values()) {
-      try {
-        await guild.commands.set([]);
-        console.log(`🧹 Cleared guild-scoped commands: ${guild.id}`);
-      } catch (err) {
-        console.warn(`⚠️ Could not clear guild commands for ${guild.id}:`, err);
-      }
+    const preferredGuildId = String(process.env.GUILD_ID || "").trim();
+    const guildTargets = preferredGuildId
+      ? [client.guilds.cache.get(preferredGuildId)].filter(Boolean)
+      : [...client.guilds.cache.values()];
+
+    if (guildTargets.length === 0) {
+      console.warn(
+        "⚠️ No guild targets found for local command registration. Check GUILD_ID or bot guild cache."
+      );
+      return;
     }
 
-    await client.application.commands.set(commands);
-    console.log("✅ Registered GLOBAL commands (may take time to appear)");
+    for (const guild of guildTargets) {
+      await guild.commands.set(commands);
+      console.log(`✅ Registered GUILD commands (fast): ${guild.id}`);
+    }
+
+    // Optional cleanup: clear global commands so only local/guild commands remain.
+    await client.application.commands.set([]);
+    console.log("🧹 Cleared GLOBAL commands (using local guild commands only)");
   } catch (err) {
     console.error("❌ Failed to register commands:", err);
   }

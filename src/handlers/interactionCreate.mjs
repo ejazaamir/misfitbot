@@ -72,7 +72,12 @@ export function registerInteractionCreateHandler({
   const pendingWelcomeSetModal = new Map();
   const pendingProfileSetModal = new Map();
   const pendingProfileSetForModal = new Map();
-  const activeQuizSessions = new Map(); // channelId -> active quiz session
+  const activeQuizSessions = new Map(); // guildId -> active quiz session
+  const QUIZ_CHANNEL_ID = String(process.env.QUIZ_CHANNEL_ID || "").trim();
+  const QUIZ_INTERVAL_SECONDS = Math.max(
+    3,
+    Math.min(600, Number(process.env.QUIZ_INTERVAL_SECONDS || 20) || 20)
+  );
 
   function cleanupPending(map, maxAgeMs = 20 * 60 * 1000) {
     const now = Date.now();
@@ -110,13 +115,6 @@ export function registerInteractionCreateHandler({
     random: "Random",
   };
 
-  const QUIZ_POINTS_BY_DIFFICULTY = {
-    easy: 1,
-    medium: 2,
-    hard: 3,
-  };
-  const QUIZ_DIFFICULTIES = ["easy", "medium", "hard"];
-
   function sanitizeModelJson(raw) {
     const text = String(raw || "").trim();
     if (!text) return "";
@@ -124,52 +122,6 @@ export function registerInteractionCreateHandler({
       return text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
     }
     return text;
-  }
-
-  function quizButtons(session, disabled = false) {
-    const optionButtons = new ActionRowBuilder();
-    for (let i = 0; i < 4; i += 1) {
-      optionButtons.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`quiz_pick:${session.id}:${i}`)
-          .setLabel(`${String.fromCharCode(65 + i)}. ${session.options[i] || "..."}`.slice(0, 80))
-          .setStyle(ButtonStyle.Primary)
-          .setDisabled(disabled)
-      );
-    }
-
-    const controls = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`quiz_stop:${session.id}`)
-        .setLabel("Stop")
-        .setStyle(ButtonStyle.Danger)
-        .setDisabled(disabled)
-    );
-
-    return [optionButtons, controls];
-  }
-
-  function buildQuizEmbed(session) {
-    const genreLabel = QUIZ_GENRE_LABELS[session.genre] || session.genre;
-    const difficultyLabel =
-      session.difficulty.charAt(0).toUpperCase() + session.difficulty.slice(1);
-    return new EmbedBuilder()
-      .setColor(EMBED_COLORS.info)
-      .setTitle(`${genreLabel} Quiz - ${difficultyLabel} - Q${session.questionNumber}`)
-      .setDescription(session.question.slice(0, 4000))
-      .addFields(
-        {
-          name: "Progress",
-          value: `${session.questionNumber}/${session.totalQuestions}`,
-          inline: true,
-        },
-        { name: "Points", value: String(session.points), inline: true },
-        { name: "Timer", value: `<t:${session.endsAt}:R>`, inline: true },
-        { name: "Started By", value: `<@${session.startedBy}>`, inline: true }
-      )
-      .setFooter({
-        text: "Pick one option. A new question appears after each selection.",
-      });
   }
 
   async function generateQuizQuestion({ genre, difficulty }) {
@@ -283,28 +235,6 @@ export function registerInteractionCreateHandler({
     return { inserted: result.changes > 0, questionKey };
   }
 
-  function getQuizQuestionCounts() {
-    return db
-      .prepare(
-        `SELECT genre, difficulty, COUNT(*) AS count
-         FROM quiz_questions
-         GROUP BY genre, difficulty
-         ORDER BY genre, difficulty`
-      )
-      .all();
-  }
-
-  function getQuizQuestionKeys(genre, difficulty) {
-    const rows = db
-      .prepare(
-        `SELECT question_key
-         FROM quiz_questions
-         WHERE genre = ? AND difficulty = ?`
-      )
-      .all(genre, difficulty);
-    return rows.map((r) => String(r.question_key || "")).filter(Boolean);
-  }
-
   function getStoredQuizQuestion(session) {
     const rows = db
       .prepare(
@@ -400,119 +330,127 @@ export function registerInteractionCreateHandler({
     `).run(guildId, userId, points, correctDelta);
   }
 
-  async function updateQuizMessage(session, disabled = false) {
-    const targetChannel = await client.channels
-      .fetch(session.channelId)
-      .catch(() => null);
-    if (!targetChannel?.isTextBased() || !session.messageId) return null;
-    const quizMessage = await targetChannel.messages
-      .fetch(session.messageId)
-      .catch(() => null);
-    if (!quizMessage) return null;
-    await quizMessage
-      .edit({
-        embeds: [buildQuizEmbed(session)],
-        components: quizButtons(session, disabled),
-      })
-      .catch(() => {});
-    return targetChannel;
+  function normalizeQuizAnswer(input) {
+    return normalizeQuestionKey(input);
   }
 
-  async function handleQuizQuestionTimeout(session) {
-    if (!session || session.closed) return;
-
-    if (session.resolving) {
-      armQuizTimeout(session);
-      return;
-    }
-
-    const targetChannel = await client.channels
-      .fetch(session.channelId)
-      .catch(() => null);
-    if (!targetChannel?.isTextBased()) {
-      await closeQuizSession(session, { type: "stopped", userId: session.startedBy });
-      return;
-    }
-
-    await targetChannel.send(
-      `⏰ Q${session.questionNumber} timed out.\nCorrect answer: **${session.options[session.correctIndex]}**`
-    );
-
-    if (session.questionNumber >= session.totalQuestions) {
-      await closeQuizSession(session, { type: "completed" });
-      return;
-    }
-
-    try {
-      await nextQuizQuestion(
-        session,
-        `➡️ Next question is live. (${session.difficulty} = ${session.points} point${
-          session.points === 1 ? "" : "s"
-        })`
-      );
-    } catch {
-      await closeQuizSession(session, { type: "stopped", userId: session.startedBy });
-    }
+  async function fetchQuizChannel(session) {
+    const ch = await client.channels.fetch(session.channelId).catch(() => null);
+    if (!ch?.isTextBased()) return null;
+    return ch;
   }
 
-  function armQuizTimeout(session) {
-    if (session.timeoutHandle) clearTimeout(session.timeoutHandle);
-    const ms = Math.max(1000, session.secondsPerQuestion * 1000);
-    session.timeoutHandle = setTimeout(() => {
-      handleQuizQuestionTimeout(session).catch(() => {
-        closeQuizSession(session, { type: "stopped", userId: session.startedBy }).catch(
-          () => {}
-        );
-      });
-    }, ms);
-  }
-
-  async function nextQuizQuestion(session, introText = "") {
-    if (!session || session.closed) return;
-
+  async function sendOpenQuizQuestion(session) {
     const next = await getNextQuizPayload(session);
     const key = next.questionKey || normalizeQuestionKey(next.question);
+
+    session.currentQuestion = next.question;
+    session.currentAnswer = String(next.options[next.correctIndex] || "").trim();
+    session.currentAnswerKey = normalizeQuizAnswer(session.currentAnswer);
+    session.lastQuestionKey = key;
+    session.roundSolved = false;
+    session.firstCorrectUserId = null;
+    session.correctNoPointUsers = new Set();
+    session.scheduledNext = false;
+
     session.recentQuestionKeys.push(key);
-    if (session.recentQuestionKeys.length > 25) {
-      session.recentQuestionKeys = session.recentQuestionKeys.slice(-25);
-    }
-    if (Number.isInteger(next.id)) {
-      session.usedQuestionIds.add(next.id);
+    if (session.recentQuestionKeys.length > 50) {
+      session.recentQuestionKeys = session.recentQuestionKeys.slice(-50);
     }
     session.askedQuestionKeys.add(key);
+    if (Number.isInteger(next.id)) session.usedQuestionIds.add(next.id);
 
-    session.question = next.question;
-    session.options = next.options;
-    session.correctIndex = next.correctIndex;
-    session.explanation = next.explanation;
-    session.questionNumber += 1;
-    session.resolving = false;
-    session.endsAt = Math.floor(Date.now() / 1000) + session.secondsPerQuestion;
+    const targetChannel = await fetchQuizChannel(session);
+    if (!targetChannel) throw new Error("Quiz channel unavailable");
 
-    const channel = await updateQuizMessage(session, false);
-    if (introText && channel) {
-      await channel.send(introText.slice(0, 1900)).catch(() => {});
-    }
-    armQuizTimeout(session);
+    const genreLabel = QUIZ_GENRE_LABELS[session.genre] || session.genre;
+    const difficultyLabel =
+      session.difficulty.charAt(0).toUpperCase() + session.difficulty.slice(1);
+    const embed = new EmbedBuilder()
+      .setColor(EMBED_COLORS.info)
+      .setTitle(`${genreLabel} Quiz - ${difficultyLabel}`)
+      .setDescription(session.currentQuestion.slice(0, 3900))
+      .setFooter({
+        text: `Reply with a word/phrase. Next round starts ${session.intervalSeconds}s after first correct answer.`,
+      });
+
+    await targetChannel.send({ embeds: [embed] });
   }
 
-  async function closeQuizSession(session, outcome) {
-    if (!session || session.closed) return;
-    session.closed = true;
-    if (session.timeoutHandle) clearTimeout(session.timeoutHandle);
-    activeQuizSessions.delete(session.channelId);
-    const targetChannel = await updateQuizMessage(session, true);
-    if (!targetChannel?.isTextBased()) return;
+  function scheduleNextOpenQuizQuestion(session) {
+    if (!session || !session.active || session.scheduledNext) return;
+    session.scheduledNext = true;
+    if (session.nextQuestionTimeout) clearTimeout(session.nextQuestionTimeout);
 
-    if (outcome.type === "completed") {
-      await targetChannel.send(
-        `🏁 Quiz session complete! ${session.totalQuestions} questions finished.`
-      );
-      return;
-    }
-
-    await targetChannel.send(`🛑 Quiz stopped by <@${outcome.userId || session.startedBy}>.`);
+    session.nextQuestionTimeout = setTimeout(async () => {
+      try {
+        if (!session.active) return;
+        await sendOpenQuizQuestion(session);
+      } catch (err) {
+        console.error("Open quiz next question failed:", err);
+      }
+    }, session.intervalSeconds * 1000);
   }
+
+  async function stopOpenQuizSession(session, stoppedByUserId = "") {
+    if (!session || !session.active) return;
+    session.active = false;
+    if (session.nextQuestionTimeout) clearTimeout(session.nextQuestionTimeout);
+    activeQuizSessions.delete(session.guildId);
+
+    const targetChannel = await fetchQuizChannel(session);
+    if (targetChannel) {
+      await targetChannel
+        .send(
+          stoppedByUserId
+            ? `🛑 Quiz stopped by <@${stoppedByUserId}>.`
+            : "🛑 Quiz stopped."
+        )
+        .catch(() => {});
+    }
+  }
+
+  client.on("messageCreate", async (message) => {
+    try {
+      if (message.author.bot || !message.guildId) return;
+
+      const session = activeQuizSessions.get(message.guildId);
+      if (!session || !session.active) return;
+      if (message.channelId !== session.channelId) return;
+      if (!session.currentAnswerKey) return;
+
+      const guess = normalizeQuizAnswer(message.content || "");
+      if (!guess || guess !== session.currentAnswerKey) return;
+
+      if (!session.roundSolved) {
+        session.roundSolved = true;
+        session.firstCorrectUserId = message.author.id;
+        recordQuizAttempt({
+          guildId: message.guildId,
+          userId: message.author.id,
+          pointsAwarded: 1,
+        });
+
+        await message.channel.send(
+          `✅ <@${message.author.id}> is first and gets **+1 point**.\nNext question in ${session.intervalSeconds}s.`
+        );
+        scheduleNextOpenQuizQuestion(session);
+        return;
+      }
+
+      if (
+        message.author.id !== session.firstCorrectUserId &&
+        !session.correctNoPointUsers.has(message.author.id)
+      ) {
+        session.correctNoPointUsers.add(message.author.id);
+        await message.channel.send(
+          `✅ <@${message.author.id}> also correct (no points, first answer already scored).`
+        );
+      }
+    } catch (err) {
+      console.error("Open quiz message handler failed:", err);
+    }
+  });
 
   function computeMbtiType(scores) {
     const ei = scores.score_ei >= 0 ? "E" : "I";
@@ -843,104 +781,6 @@ export function registerInteractionCreateHandler({
   client.on("interactionCreate", async (interaction) => {
     try {
       if (interaction.isButton()) {
-        if (
-          interaction.customId.startsWith("quiz_pick:") ||
-          interaction.customId.startsWith("quiz_stop:")
-        ) {
-          if (!interaction.guildId) {
-            await interaction.reply({
-              content: "Quiz only works in a server.",
-              ephemeral: true,
-            });
-            return;
-          }
-
-          const [action, sessionId, optionRaw] = interaction.customId.split(":");
-          const session = activeQuizSessions.get(interaction.channelId);
-          if (
-            !session ||
-            session.id !== sessionId ||
-            session.closed ||
-            Math.floor(Date.now() / 1000) >= session.endsAt
-          ) {
-            await interaction.reply({
-              content: "That quiz session has ended.",
-              ephemeral: true,
-            });
-            return;
-          }
-
-          if (action === "quiz_stop") {
-            const canStop =
-              interaction.user.id === OWNER_ID ||
-              interaction.user.id === session.startedBy;
-            if (!canStop) {
-              await interaction.reply({
-                content: "Only the starter (or Snooty) can stop this quiz.",
-                ephemeral: true,
-              });
-              return;
-            }
-            await interaction.deferUpdate();
-            await closeQuizSession(session, {
-              type: "stopped",
-              userId: interaction.user.id,
-            });
-            return;
-          }
-
-          if (session.resolving) {
-            await interaction.reply({
-              content: "Answer is being processed. Try the next question in a moment.",
-              ephemeral: true,
-            });
-            return;
-          }
-
-          const pickedIndex = Number(optionRaw);
-          if (!Number.isInteger(pickedIndex) || pickedIndex < 0 || pickedIndex > 3) {
-            await interaction.reply({
-              content: "Invalid option.",
-              ephemeral: true,
-            });
-            return;
-          }
-
-          session.resolving = true;
-          const correct = pickedIndex === session.correctIndex;
-          recordQuizAttempt({
-            guildId: interaction.guildId,
-            userId: interaction.user.id,
-            pointsAwarded: correct ? session.points : 0,
-          });
-
-          await interaction.reply({
-            content: correct
-              ? `✅ <@${interaction.user.id}> correct! +${session.points} point(s).`
-              : `❌ <@${interaction.user.id}> chose **${
-                  session.options[pickedIndex]
-                }**. Correct was **${session.options[session.correctIndex]}**.`,
-            ephemeral: false,
-          });
-
-          if (session.questionNumber >= session.totalQuestions) {
-            await closeQuizSession(session, { type: "completed" });
-            return;
-          }
-
-          try {
-            await nextQuizQuestion(
-              session,
-              `➡️ Next question is live. (${session.difficulty} = ${session.points} point${
-                session.points === 1 ? "" : "s"
-              })`
-            );
-          } catch {
-            await closeQuizSession(session, { type: "stopped", userId: interaction.user.id });
-          }
-          return;
-        }
-
         if (
           !interaction.customId.startsWith("mbti_ans:") &&
           !interaction.customId.startsWith("mbti_nav:")
@@ -1722,208 +1562,14 @@ export function registerInteractionCreateHandler({
           return;
         }
 
-        if (sub === "inventory") {
-          await safeDefer(interaction, { ephemeral: true });
-          const rows = getQuizQuestionCounts();
-          if (rows.length === 0) {
-            await interaction.editReply({
-              embeds: [
-                statusEmbed({
-                  title: "Quiz Inventory",
-                  description: "No stored quiz questions yet. Use `/quiz seed`.",
-                  tone: "info",
-                }),
-              ],
-            });
-            return;
-          }
-
-          const lines = rows.map((r) => {
-            const genre = QUIZ_GENRE_LABELS[r.genre] || r.genre;
-            return `${genre} | ${String(r.difficulty)}: **${r.count}**`;
-          });
-
-          await interaction.editReply({
-            embeds: [
-              statusEmbed({
-                title: "Quiz Inventory",
-                description: lines.join("\n").slice(0, 3900),
-                tone: "info",
-              }),
-            ],
-          });
-          return;
-        }
-
-        if (sub === "seed") {
-          const isOwner = interaction.user.id === OWNER_ID;
-          if (!isOwner) {
-            await interaction.reply({
-              embeds: [
-                statusEmbed({
-                  title: "Permission Denied",
-                  description: "Only Snooty can seed quiz questions.",
-                  tone: "error",
-                }),
-              ],
-              ephemeral: true,
-            });
-            return;
-          }
-
-          await safeDefer(interaction, { ephemeral: true });
-
-          const genreArg = interaction.options.getString("genre", true);
-          const difficultyArg = interaction.options.getString("difficulty", true);
-          let count = interaction.options.getInteger("count", true);
-          if (count < 1) count = 1;
-          if (count > 200) count = 200;
-
-          const genres =
-            genreArg === "__all" ? Object.keys(QUIZ_GENRE_LABELS) : [genreArg];
-          const difficulties =
-            difficultyArg === "__all" ? QUIZ_DIFFICULTIES : [difficultyArg];
-
-          const combos = [];
-          for (const g of genres) {
-            for (const d of difficulties) combos.push({ genre: g, difficulty: d });
-          }
-
-          const totalTarget = combos.length * count;
-          if (totalTarget > 2000) {
-            await interaction.editReply({
-              embeds: [
-                statusEmbed({
-                  title: "Seed Too Large",
-                  description:
-                    `Requested ${totalTarget} questions. Max per run is 2000. ` +
-                    "Reduce count or avoid selecting all genres+difficulties at once.",
-                  tone: "warn",
-                }),
-              ],
-            });
-            return;
-          }
-
-          let inserted = 0;
-          let skipped = 0;
-          let failed = 0;
-          let processed = 0;
-          let lastProgressAt = Date.now();
-          const seedAttemptsPerQuestion = 4;
-
-          const renderProgress = () => {
-            return [
-              `Requested: ${totalTarget}`,
-              `Processed: ${processed}/${totalTarget}`,
-              `Inserted: ${inserted}`,
-              `Skipped duplicates: ${skipped}`,
-              `Failed: ${failed}`,
-            ].join("\n");
-          };
-
-          await interaction.editReply({
-            embeds: [
-              statusEmbed({
-                title: "Quiz Seeding In Progress",
-                description: renderProgress(),
-                tone: "info",
-              }),
-            ],
-          });
-
-          for (const combo of combos) {
-            const existing = new Set(
-              getQuizQuestionKeys(combo.genre, combo.difficulty)
-            );
-
-            for (let i = 0; i < count; i += 1) {
-              let completed = false;
-              let duplicateOnly = false;
-
-              for (let attempt = 0; attempt < seedAttemptsPerQuestion; attempt += 1) {
-                try {
-                  const generated = await generateUniqueQuizQuestion({
-                    genre: combo.genre,
-                    difficulty: combo.difficulty,
-                    recentQuestionKeys: Array.from(existing),
-                    maxTries: 7,
-                  });
-                  const saved = insertQuizQuestion({
-                    genre: combo.genre,
-                    difficulty: combo.difficulty,
-                    question: generated.question,
-                    options: generated.options,
-                    correctIndex: generated.correctIndex,
-                    explanation: generated.explanation,
-                    createdBy: interaction.user.id,
-                  });
-                  if (saved.inserted) {
-                    inserted += 1;
-                    existing.add(saved.questionKey);
-                    completed = true;
-                    break;
-                  }
-
-                  duplicateOnly = true;
-                } catch {
-                  // retry this target slot; only count as failed if all retries fail
-                }
-              }
-
-              if (!completed) {
-                if (duplicateOnly) skipped += 1;
-                else failed += 1;
-              }
-
-              {
-                processed += 1;
-
-                const shouldUpdate =
-                  processed === totalTarget ||
-                  processed % 20 === 0 ||
-                  Date.now() - lastProgressAt > 4000;
-                if (shouldUpdate) {
-                  lastProgressAt = Date.now();
-                  await interaction.editReply({
-                    embeds: [
-                      statusEmbed({
-                        title: "Quiz Seeding In Progress",
-                        description: renderProgress(),
-                        tone: "info",
-                      }),
-                    ],
-                  });
-                }
-              }
-            }
-          }
-
-          await interaction.editReply({
-            embeds: [
-              statusEmbed({
-                title: "Quiz Seeding Complete",
-                description: [
-                  `Requested: ${totalTarget}`,
-                  `Inserted: ${inserted}`,
-                  `Skipped duplicates: ${skipped}`,
-                  `Failed: ${failed}`,
-                ].join("\n"),
-                tone: "success",
-              }),
-            ],
-          });
-          return;
-        }
-
         if (sub === "stop") {
-          const session = activeQuizSessions.get(interaction.channelId);
-          if (!session || session.closed) {
+          const session = activeQuizSessions.get(interaction.guildId);
+          if (!session || !session.active) {
             await interaction.reply({
               embeds: [
                 statusEmbed({
                   title: "Quiz",
-                  description: "No active quiz in this channel.",
+                  description: "No active quiz in this server.",
                   tone: "warn",
                 }),
               ],
@@ -1932,14 +1578,17 @@ export function registerInteractionCreateHandler({
             return;
           }
 
+          const isOwner = interaction.user.id === OWNER_ID;
+          const isStarter = interaction.user.id === session.startedBy;
+          const isAdmin = Boolean(interaction.memberPermissions?.has("ManageGuild"));
           const canStop =
-            interaction.user.id === OWNER_ID || interaction.user.id === session.startedBy;
+            isOwner || isStarter || isAdmin;
           if (!canStop) {
             await interaction.reply({
               embeds: [
                 statusEmbed({
                   title: "Quiz",
-                  description: "Only the starter (or Snooty) can stop this quiz.",
+                  description: "Only an admin, the starter, or Snooty can stop this quiz.",
                   tone: "error",
                 }),
               ],
@@ -1954,25 +1603,22 @@ export function registerInteractionCreateHandler({
                 title: "Quiz",
                 description: "Stopping quiz...",
                 tone: "info",
-              }),
-            ],
-            ephemeral: true,
-          });
-          await closeQuizSession(session, {
-            type: "stopped",
-            userId: interaction.user.id,
-          });
+                }),
+              ],
+              ephemeral: true,
+            });
+          await stopOpenQuizSession(session, interaction.user.id);
           return;
         }
 
         if (sub === "start") {
-          const existing = activeQuizSessions.get(interaction.channelId);
-          if (existing && !existing.closed) {
+          const existing = activeQuizSessions.get(interaction.guildId);
+          if (existing && existing.active) {
             await interaction.reply({
               embeds: [
                 statusEmbed({
                   title: "Quiz Already Running",
-                  description: "Finish or stop the current quiz first.",
+                  description: `Quiz is already running in <#${existing.channelId}>.`,
                   tone: "warn",
                 }),
               ],
@@ -1981,66 +1627,85 @@ export function registerInteractionCreateHandler({
             return;
           }
 
-          await safeDefer(interaction);
+          const isOwner = interaction.user.id === OWNER_ID;
+          const isAdmin = Boolean(interaction.memberPermissions?.has("ManageGuild"));
+          if (!isOwner && !isAdmin) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Permission Denied",
+                  description: "Only admins (or Snooty) can start the quiz.",
+                  tone: "error",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          await safeDefer(interaction, { ephemeral: true });
 
           const genre = interaction.options.getString("genre", true);
           const difficulty = interaction.options.getString("difficulty", true);
-          let seconds = interaction.options.getInteger("seconds") ?? 45;
-          if (seconds < 15) seconds = 15;
-          if (seconds > 180) seconds = 180;
-
-          const points = QUIZ_POINTS_BY_DIFFICULTY[difficulty] || 1;
-          const endsAt = Math.floor(Date.now() / 1000) + seconds;
-          const sessionId = `${Date.now().toString(36)}${Math.random()
-            .toString(36)
-            .slice(2, 7)}`;
+          const channelId = QUIZ_CHANNEL_ID || interaction.channelId;
 
           const session = {
-            id: sessionId,
             guildId: interaction.guildId,
-            channelId: interaction.channelId,
-            messageId: "",
+            channelId,
             startedBy: interaction.user.id,
             genre,
             difficulty,
-            secondsPerQuestion: seconds,
-            points,
-            question: "",
-            options: ["", "", "", ""],
-            correctIndex: 0,
-            explanation: "",
+            intervalSeconds: QUIZ_INTERVAL_SECONDS,
             recentQuestionKeys: [],
             askedQuestionKeys: new Set(),
             usedQuestionIds: new Set(),
-            endsAt,
-            questionNumber: 1,
-            totalQuestions: 10,
-            resolving: false,
-            closed: false,
-            timeoutHandle: null,
+            currentQuestion: "",
+            currentAnswer: "",
+            currentAnswerKey: "",
+            roundSolved: false,
+            firstCorrectUserId: null,
+            correctNoPointUsers: new Set(),
+            scheduledNext: false,
+            nextQuestionTimeout: null,
+            active: true,
           };
 
-          const first = await getNextQuizPayload(session);
-          const firstKey = first.questionKey || normalizeQuestionKey(first.question);
-          session.question = first.question;
-          session.options = first.options;
-          session.correctIndex = first.correctIndex;
-          session.explanation = first.explanation;
-          session.recentQuestionKeys = [firstKey];
-          session.askedQuestionKeys = new Set([firstKey]);
-          if (Number.isInteger(first.id)) session.usedQuestionIds.add(first.id);
-
-          activeQuizSessions.set(interaction.channelId, session);
+          try {
+            await sendOpenQuizQuestion(session);
+            activeQuizSessions.set(interaction.guildId, session);
+          } catch {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Quiz",
+                  description:
+                    "Could not start quiz question generation. Try again in a few seconds.",
+                  tone: "error",
+                }),
+              ],
+            });
+            return;
+          }
 
           await interaction.editReply({
-            embeds: [buildQuizEmbed(session)],
-            components: quizButtons(session),
+            embeds: [
+              statusEmbed({
+                title: "Quiz Started",
+                description: [
+                  `Channel: <#${channelId}>`,
+                  `Genre: ${QUIZ_GENRE_LABELS[genre] || genre}`,
+                  `Difficulty: ${difficulty}`,
+                  `Interval: ${QUIZ_INTERVAL_SECONDS}s`,
+                  QUIZ_CHANNEL_ID && interaction.channelId !== channelId
+                    ? `Configured quiz channel override is active via \`QUIZ_CHANNEL_ID\`.`
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join("\n"),
+                tone: "success",
+              }),
+            ],
           });
-
-          const sent = await interaction.fetchReply().catch(() => null);
-          session.messageId = sent?.id || "";
-
-          armQuizTimeout(session);
           return;
         }
 
