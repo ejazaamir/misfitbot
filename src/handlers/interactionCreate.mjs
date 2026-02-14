@@ -72,6 +72,7 @@ export function registerInteractionCreateHandler({
   const pendingWelcomeSetModal = new Map();
   const pendingProfileSetModal = new Map();
   const pendingProfileSetForModal = new Map();
+  const activeQuizSessions = new Map(); // channelId -> active quiz session
 
   function cleanupPending(map, maxAgeMs = 20 * 60 * 1000) {
     const now = Date.now();
@@ -94,6 +95,236 @@ export function registerInteractionCreateHandler({
     a: 1,
     sa: 2,
   };
+
+  const QUIZ_GENRE_LABELS = {
+    history: "History",
+    politics: "Politics",
+    sports: "Sports",
+    harry_potter: "Harry Potter",
+    game_of_thrones: "Game of Thrones",
+    lord_of_the_rings: "Lord of the Rings",
+    movies: "Movies",
+    tv_show: "TV Show",
+    celebrity_news: "Celebrity News",
+    music: "Music",
+    random: "Random",
+  };
+
+  const QUIZ_POINTS_BY_DIFFICULTY = {
+    easy: 1,
+    medium: 2,
+    hard: 3,
+  };
+
+  function sanitizeModelJson(raw) {
+    const text = String(raw || "").trim();
+    if (!text) return "";
+    if (text.startsWith("```")) {
+      return text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    }
+    return text;
+  }
+
+  function normalizeAnswerText(input) {
+    return String(input || "")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function quizButtons(sessionId, disabled = false) {
+    return [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`quiz_answer:${sessionId}`)
+          .setLabel("Answer")
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(disabled),
+        new ButtonBuilder()
+          .setCustomId(`quiz_stop:${sessionId}`)
+          .setLabel("Stop")
+          .setStyle(ButtonStyle.Danger)
+          .setDisabled(disabled)
+      ),
+    ];
+  }
+
+  function buildQuizEmbed(session) {
+    const genreLabel = QUIZ_GENRE_LABELS[session.genre] || session.genre;
+    const difficultyLabel =
+      session.difficulty.charAt(0).toUpperCase() + session.difficulty.slice(1);
+    return new EmbedBuilder()
+      .setColor(EMBED_COLORS.info)
+      .setTitle(`${genreLabel} Quiz - ${difficultyLabel}`)
+      .setDescription(session.question.slice(0, 4000))
+      .addFields(
+        { name: "Points", value: String(session.points), inline: true },
+        { name: "Timer", value: `<t:${session.endsAt}:R>`, inline: true },
+        { name: "Started By", value: `<@${session.startedBy}>`, inline: true }
+      )
+      .setFooter({
+        text: "Click Answer and submit a word, phrase, or sentence.",
+      });
+  }
+
+  async function generateQuizQuestion({ genre, difficulty }) {
+    const genreLabel = QUIZ_GENRE_LABELS[genre] || genre;
+    const resp = await openai.chat.completions.create({
+      model: "gpt-4.1-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "Create one quiz question and return strict JSON only. Keys: question (string), canonical_answer (string), acceptable_answers (array of strings, max 8), explanation (string max 180 chars). No markdown.",
+        },
+        {
+          role: "user",
+          content: `Genre: ${genreLabel}\nDifficulty: ${difficulty}\nOutput JSON now.`,
+        },
+      ],
+      temperature: 0.9,
+    });
+
+    const raw = resp.choices?.[0]?.message?.content || "";
+    let parsed = null;
+    try {
+      parsed = JSON.parse(sanitizeModelJson(raw));
+    } catch {
+      parsed = null;
+    }
+
+    const question = String(parsed?.question || "").trim();
+    const canonical = String(parsed?.canonical_answer || "").trim();
+    const explanation = String(parsed?.explanation || "").trim().slice(0, 180);
+    const acceptable = Array.isArray(parsed?.acceptable_answers)
+      ? parsed.acceptable_answers
+          .map((v) => String(v || "").trim())
+          .filter(Boolean)
+          .slice(0, 8)
+      : [];
+
+    if (!question || !canonical) {
+      throw new Error("Quiz generation failed.");
+    }
+
+    return {
+      question: question.slice(0, 1200),
+      canonicalAnswer: canonical.slice(0, 300),
+      acceptableAnswers: acceptable,
+      explanation,
+    };
+  }
+
+  async function evaluateQuizAnswer({
+    question,
+    canonicalAnswer,
+    acceptableAnswers,
+    userAnswer,
+  }) {
+    const normalizedUser = normalizeAnswerText(userAnswer);
+    const normalizedCanonical = normalizeAnswerText(canonicalAnswer);
+    const normalizedAcceptable = acceptableAnswers.map(normalizeAnswerText);
+
+    if (
+      normalizedUser &&
+      (normalizedUser === normalizedCanonical ||
+        normalizedAcceptable.includes(normalizedUser))
+    ) {
+      return { correct: true, reason: "Exact match." };
+    }
+
+    const resp = await openai.chat.completions.create({
+      model: "gpt-4.1-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "Judge if USER_ANSWER is correct for the quiz. Be lenient with synonyms, abbreviations, equivalent phrasing, and minor spelling errors. Return strict JSON only: {\"correct\":true|false,\"reason\":\"short\"}.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            question,
+            canonical_answer: canonicalAnswer,
+            acceptable_answers: acceptableAnswers,
+            user_answer: userAnswer,
+          }),
+        },
+      ],
+      temperature: 0,
+    });
+
+    const raw = resp.choices?.[0]?.message?.content || "";
+    try {
+      const parsed = JSON.parse(sanitizeModelJson(raw));
+      return {
+        correct: Boolean(parsed?.correct),
+        reason: String(parsed?.reason || "").trim().slice(0, 180),
+      };
+    } catch {
+      return { correct: false, reason: "Could not verify answer." };
+    }
+  }
+
+  function recordQuizAttempt({ guildId, userId, pointsAwarded }) {
+    const points = Math.max(0, Number(pointsAwarded) || 0);
+    const correctDelta = points > 0 ? 1 : 0;
+    db.prepare(`
+      INSERT INTO quiz_scores (
+        guild_id, user_id, points, correct_answers, total_attempts, updated_at
+      )
+      VALUES (?, ?, ?, ?, 1, strftime('%s','now'))
+      ON CONFLICT(guild_id, user_id) DO UPDATE SET
+        points = points + excluded.points,
+        correct_answers = correct_answers + excluded.correct_answers,
+        total_attempts = total_attempts + 1,
+        updated_at = strftime('%s','now')
+    `).run(guildId, userId, points, correctDelta);
+  }
+
+  async function closeQuizSession(session, outcome) {
+    if (!session || session.closed) return;
+    session.closed = true;
+    if (session.timeoutHandle) clearTimeout(session.timeoutHandle);
+    activeQuizSessions.delete(session.channelId);
+
+    const targetChannel = await client.channels
+      .fetch(session.channelId)
+      .catch(() => null);
+    if (!targetChannel?.isTextBased()) return;
+
+    if (session.messageId) {
+      const quizMessage = await targetChannel.messages
+        .fetch(session.messageId)
+        .catch(() => null);
+      if (quizMessage) {
+        await quizMessage
+          .edit({
+            embeds: [buildQuizEmbed(session)],
+            components: quizButtons(session.id, true),
+          })
+          .catch(() => {});
+      }
+    }
+
+    if (outcome.type === "correct") {
+      const extra = outcome.reason ? `\nReason: ${outcome.reason}` : "";
+      await targetChannel.send(
+        `✅ <@${outcome.userId}> got it right! +${session.points} point(s).\nAnswer: **${session.canonicalAnswer}**${extra}`
+      );
+      return;
+    }
+
+    if (outcome.type === "timeout") {
+      await targetChannel.send(
+        `⏰ Time is up. No correct answer.\nAnswer: **${session.canonicalAnswer}**`
+      );
+      return;
+    }
+
+    await targetChannel.send(`🛑 Quiz stopped by <@${outcome.userId}>.`);
+  }
 
   function computeMbtiType(scores) {
     const ei = scores.score_ei >= 0 ? "E" : "I";
@@ -425,6 +656,76 @@ export function registerInteractionCreateHandler({
     try {
       if (interaction.isButton()) {
         if (
+          interaction.customId.startsWith("quiz_answer:") ||
+          interaction.customId.startsWith("quiz_stop:")
+        ) {
+          if (!interaction.guildId) {
+            await interaction.reply({
+              content: "Quiz only works in a server.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const [action, sessionId] = interaction.customId.split(":");
+          const session = activeQuizSessions.get(interaction.channelId);
+          if (
+            !session ||
+            session.id !== sessionId ||
+            session.closed ||
+            Math.floor(Date.now() / 1000) >= session.endsAt
+          ) {
+            await interaction.reply({
+              content: "That quiz session has ended.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          if (action === "quiz_stop") {
+            const canStop =
+              interaction.user.id === OWNER_ID ||
+              interaction.user.id === session.startedBy;
+            if (!canStop) {
+              await interaction.reply({
+                content: "Only the starter (or Snooty) can stop this quiz.",
+                ephemeral: true,
+              });
+              return;
+            }
+            await interaction.deferUpdate();
+            await closeQuizSession(session, {
+              type: "stopped",
+              userId: interaction.user.id,
+            });
+            return;
+          }
+
+          if (session.answeredUsers.has(interaction.user.id)) {
+            await interaction.reply({
+              content: "You already answered this question.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const modal = new ModalBuilder()
+            .setCustomId(`quiz_modal:${session.id}`)
+            .setTitle("Submit Quiz Answer");
+          const input = new TextInputBuilder()
+            .setCustomId("answer")
+            .setLabel("Your answer (word / phrase / sentence)")
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true)
+            .setMaxLength(300)
+            .setPlaceholder("Type your answer...");
+
+          modal.addComponents(new ActionRowBuilder().addComponents(input));
+          await interaction.showModal(modal);
+          return;
+        }
+
+        if (
           !interaction.customId.startsWith("mbti_ans:") &&
           !interaction.customId.startsWith("mbti_nav:")
         ) {
@@ -634,6 +935,96 @@ export function registerInteractionCreateHandler({
 
       if (interaction.isModalSubmit()) {
         const cid = interaction.customId;
+
+        if (cid.startsWith("quiz_modal:")) {
+          const sessionId = cid.slice("quiz_modal:".length);
+          const session = activeQuizSessions.get(interaction.channelId);
+          if (
+            !interaction.guildId ||
+            !session ||
+            session.id !== sessionId ||
+            session.closed ||
+            Math.floor(Date.now() / 1000) >= session.endsAt
+          ) {
+            await interaction.reply({
+              content: "That quiz session has ended.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          if (session.answeredUsers.has(interaction.user.id)) {
+            await interaction.reply({
+              content: "You already answered this question.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          if (session.resolving) {
+            await interaction.reply({
+              content: "Another answer is being checked. Try again in a moment.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const userAnswer = interaction.fields
+            .getTextInputValue("answer")
+            .trim()
+            .slice(0, 300);
+          if (!userAnswer) {
+            await interaction.reply({
+              content: "Answer cannot be empty.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          session.answeredUsers.add(interaction.user.id);
+          session.resolving = true;
+          await interaction.deferReply({ ephemeral: true });
+
+          try {
+            const verdict = await evaluateQuizAnswer({
+              question: session.question,
+              canonicalAnswer: session.canonicalAnswer,
+              acceptableAnswers: session.acceptableAnswers,
+              userAnswer,
+            });
+
+            if (verdict.correct) {
+              recordQuizAttempt({
+                guildId: interaction.guildId,
+                userId: interaction.user.id,
+                pointsAwarded: session.points,
+              });
+
+              await interaction.editReply(
+                `✅ Correct! You earned ${session.points} point(s).`
+              );
+
+              await closeQuizSession(session, {
+                type: "correct",
+                userId: interaction.user.id,
+                reason: verdict.reason,
+              });
+              return;
+            }
+
+            recordQuizAttempt({
+              guildId: interaction.guildId,
+              userId: interaction.user.id,
+              pointsAwarded: 0,
+            });
+            await interaction.editReply(
+              `❌ Not quite.${verdict.reason ? ` ${verdict.reason}` : ""}`
+            );
+            return;
+          } finally {
+            if (!session.closed) session.resolving = false;
+          }
+        }
 
         if (cid.startsWith("schedule_embed:")) {
           const token = cid.slice("schedule_embed:".length);
@@ -1140,6 +1531,197 @@ export function registerInteractionCreateHandler({
         } else {
           await interaction.reply({ embeds: [embed], ephemeral: true });
         }
+        return;
+      }
+
+      if (interaction.commandName === "quiz") {
+        if (!interaction.guildId) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Quiz",
+                description: "This command only works in a server.",
+                tone: "warn",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const sub = interaction.options.getSubcommand();
+
+        if (sub === "leaderboard") {
+          await safeDefer(interaction);
+          let limit = interaction.options.getInteger("limit") ?? 10;
+          if (limit < 3) limit = 3;
+          if (limit > 20) limit = 20;
+
+          const rows = db
+            .prepare(
+              `SELECT user_id, points, correct_answers, total_attempts
+               FROM quiz_scores
+               WHERE guild_id = ?
+               ORDER BY points DESC, correct_answers DESC, total_attempts ASC
+               LIMIT ?`
+            )
+            .all(interaction.guildId, limit);
+
+          if (rows.length === 0) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Quiz Leaderboard",
+                  description: "No quiz scores yet. Start one with `/quiz start`.",
+                  tone: "info",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const lines = rows.map((r, i) => {
+            return `${i + 1}. <@${r.user_id}> - **${r.points}** pts (${r.correct_answers}/${r.total_attempts} correct)`;
+          });
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Quiz Leaderboard",
+                description: lines.join("\n").slice(0, 3900),
+                tone: "info",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "stop") {
+          const session = activeQuizSessions.get(interaction.channelId);
+          if (!session || session.closed) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Quiz",
+                  description: "No active quiz in this channel.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const canStop =
+            interaction.user.id === OWNER_ID || interaction.user.id === session.startedBy;
+          if (!canStop) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Quiz",
+                  description: "Only the starter (or Snooty) can stop this quiz.",
+                  tone: "error",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Quiz",
+                description: "Stopping quiz...",
+                tone: "info",
+              }),
+            ],
+            ephemeral: true,
+          });
+          await closeQuizSession(session, {
+            type: "stopped",
+            userId: interaction.user.id,
+          });
+          return;
+        }
+
+        if (sub === "start") {
+          const existing = activeQuizSessions.get(interaction.channelId);
+          if (existing && !existing.closed) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Quiz Already Running",
+                  description: "Finish or stop the current quiz first.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          await safeDefer(interaction);
+
+          const genre = interaction.options.getString("genre", true);
+          const difficulty = interaction.options.getString("difficulty", true);
+          let seconds = interaction.options.getInteger("seconds") ?? 45;
+          if (seconds < 15) seconds = 15;
+          if (seconds > 180) seconds = 180;
+
+          const points = QUIZ_POINTS_BY_DIFFICULTY[difficulty] || 1;
+          const generated = await generateQuizQuestion({ genre, difficulty });
+          const endsAt = Math.floor(Date.now() / 1000) + seconds;
+          const sessionId = `${Date.now().toString(36)}${Math.random()
+            .toString(36)
+            .slice(2, 7)}`;
+
+          const session = {
+            id: sessionId,
+            guildId: interaction.guildId,
+            channelId: interaction.channelId,
+            messageId: "",
+            startedBy: interaction.user.id,
+            genre,
+            difficulty,
+            points,
+            question: generated.question,
+            canonicalAnswer: generated.canonicalAnswer,
+            acceptableAnswers: generated.acceptableAnswers,
+            explanation: generated.explanation,
+            endsAt,
+            answeredUsers: new Set(),
+            resolving: false,
+            closed: false,
+            timeoutHandle: null,
+          };
+
+          activeQuizSessions.set(interaction.channelId, session);
+
+          await interaction.editReply({
+            embeds: [buildQuizEmbed(session)],
+            components: quizButtons(session.id),
+          });
+
+          const sent = await interaction.fetchReply().catch(() => null);
+          session.messageId = sent?.id || "";
+
+          session.timeoutHandle = setTimeout(() => {
+            closeQuizSession(session, { type: "timeout" }).catch(() => {});
+          }, seconds * 1000);
+          return;
+        }
+
+        await interaction.reply({
+          embeds: [
+            statusEmbed({
+              title: "Quiz",
+              description: "That subcommand isn’t wired up 😌",
+              tone: "warn",
+            }),
+          ],
+          ephemeral: true,
+        });
         return;
       }
 

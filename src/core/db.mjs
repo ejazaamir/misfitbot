@@ -114,6 +114,23 @@ export function createDb({ dbPath, defaultBotMode }) {
     );
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS quiz_scores (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      points INTEGER NOT NULL DEFAULT 0,
+      correct_answers INTEGER NOT NULL DEFAULT 0,
+      total_attempts INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      PRIMARY KEY (guild_id, user_id)
+    );
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_quiz_scores_guild_points
+    ON quiz_scores (guild_id, points DESC, correct_answers DESC);
+  `);
+
   ensureColumn(
     "auto_purge_rules",
     "interval_seconds",

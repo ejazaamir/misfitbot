@@ -177,6 +177,73 @@ export function getCommands({ ApplicationCommandType }) {
       ],
     },
     {
+      name: "quiz",
+      description: "Start a timed quiz, answer with AI checking, and view leaderboard.",
+      options: [
+        {
+          type: 1,
+          name: "start",
+          description: "Start a public timed quiz in this channel.",
+          options: [
+            {
+              type: 3,
+              name: "genre",
+              description: "Quiz category",
+              required: true,
+              choices: [
+                { name: "History", value: "history" },
+                { name: "Politics", value: "politics" },
+                { name: "Sports", value: "sports" },
+                { name: "Harry Potter", value: "harry_potter" },
+                { name: "Game of Thrones", value: "game_of_thrones" },
+                { name: "Lord of the Rings", value: "lord_of_the_rings" },
+                { name: "Movies", value: "movies" },
+                { name: "TV Show", value: "tv_show" },
+                { name: "Celebrity News", value: "celebrity_news" },
+                { name: "Music", value: "music" },
+                { name: "Random", value: "random" },
+              ],
+            },
+            {
+              type: 3,
+              name: "difficulty",
+              description: "Point value: easy=1, medium=2, hard=3",
+              required: true,
+              choices: [
+                { name: "Easy (1 point)", value: "easy" },
+                { name: "Medium (2 points)", value: "medium" },
+                { name: "Hard (3 points)", value: "hard" },
+              ],
+            },
+            {
+              type: 4,
+              name: "seconds",
+              description: "Timer in seconds (15-180). Default 45.",
+              required: false,
+            },
+          ],
+        },
+        {
+          type: 1,
+          name: "leaderboard",
+          description: "Show quiz leaderboard for this server.",
+          options: [
+            {
+              type: 4,
+              name: "limit",
+              description: "How many users to show (3-20). Default 10.",
+              required: false,
+            },
+          ],
+        },
+        {
+          type: 1,
+          name: "stop",
+          description: "Stop the active quiz in this channel (starter or owner).",
+        },
+      ],
+    },
+    {
       name: "mbti",
       description: "Take an MBTI-style personality test.",
       options: [
@@ -669,6 +736,9 @@ export function getHelpText() {
     "• `/summarizechannel count:<1-100>`",
     "• `/voicenote text:<text> [voice]`",
     "• `/beautify [text] [message:<link>] [style]`",
+    "• `/quiz start genre:<...> difficulty:<easy|medium|hard> [seconds]`",
+    "• `/quiz leaderboard [limit]`",
+    "• `/quiz stop`",
     "• `/mbti start` / `/mbti result` / `/mbti reset [user]`",
     "• Beautify styles: box, double_box, banner, wave, glitch, spaced, tinycaps, bubble, leet, shadow, matrix, staircase, framed_quote, divider, code",
     "• `/schedule when:` ISO UTC (`2026-02-14T21:30:00Z`), unix, `dd/hh/mm` (`01/02/30`), `hh/mm`, or `1d2h30m`",
