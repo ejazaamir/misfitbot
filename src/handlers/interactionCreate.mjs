@@ -73,6 +73,7 @@ export function registerInteractionCreateHandler({
   const pendingProfileSetModal = new Map();
   const pendingProfileSetForModal = new Map();
   const activeQuizSessions = new Map(); // guildId -> active quiz session
+  const lastStartQuestionKeyByGuild = new Map(); // guildId -> last opening question key
   const QUIZ_CHANNEL_ID = String(process.env.QUIZ_CHANNEL_ID || "").trim();
   const QUIZ_ACK_WINDOW_SECONDS = Math.max(
     5,
@@ -1752,6 +1753,53 @@ export function registerInteractionCreateHandler({
           return;
         }
 
+        if (sub === "clearleaderboard") {
+          const isOwner = interaction.user.id === OWNER_ID;
+          const isAdmin = Boolean(interaction.memberPermissions?.has("ManageGuild"));
+          if (!isOwner && !isAdmin) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Quiz",
+                  description: "Only an admin or Snooty can clear the quiz leaderboard.",
+                  tone: "error",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          await safeDefer(interaction, { ephemeral: true });
+          try {
+            const before = db
+              .prepare(`SELECT COUNT(*) AS c FROM quiz_scores WHERE guild_id = ?`)
+              .get(interaction.guildId)?.c || 0;
+            db.prepare(`DELETE FROM quiz_scores WHERE guild_id = ?`).run(interaction.guildId);
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Quiz Leaderboard Cleared",
+                  description: `Removed ${before} score row(s) for this server.`,
+                  tone: "success",
+                }),
+              ],
+            });
+          } catch {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Quiz Leaderboard Clear Failed",
+                  description:
+                    "Could not clear leaderboard in this DB instance (likely missing table).",
+                  tone: "warn",
+                }),
+              ],
+            });
+          }
+          return;
+        }
+
         if (sub === "start") {
           const existing = activeQuizSessions.get(interaction.guildId);
           if (existing && existing.active) {
@@ -1787,6 +1835,9 @@ export function registerInteractionCreateHandler({
           await safeDefer(interaction, { ephemeral: true });
 
           const channelId = QUIZ_CHANNEL_ID || interaction.channelId;
+          const lastStartKey =
+            String(lastStartQuestionKeyByGuild.get(interaction.guildId) || "").trim();
+          const seedRecent = lastStartKey ? [lastStartKey] : [];
 
           const session = {
             guildId: interaction.guildId,
@@ -1795,8 +1846,8 @@ export function registerInteractionCreateHandler({
             genre: "mixed",
             difficulty: "mixed",
             intervalSeconds: 0,
-            recentQuestionKeys: [],
-            askedQuestionKeys: new Set(),
+            recentQuestionKeys: seedRecent,
+            askedQuestionKeys: new Set(seedRecent),
             usedQuestionIds: new Set(),
             currentQuestion: "",
             currentAnswer: "",
@@ -1817,8 +1868,35 @@ export function registerInteractionCreateHandler({
 
           try {
             await sendOpenQuizQuestion(session);
+            if (session.lastQuestionKey) {
+              lastStartQuestionKeyByGuild.set(interaction.guildId, session.lastQuestionKey);
+            }
             activeQuizSessions.set(interaction.guildId, session);
           } catch {
+            // If uniqueness constraints became too strict with a tiny question pool, retry once.
+            if (lastStartKey) {
+              try {
+                session.recentQuestionKeys = [];
+                session.askedQuestionKeys = new Set();
+                await sendOpenQuizQuestion(session);
+                if (session.lastQuestionKey) {
+                  lastStartQuestionKeyByGuild.set(interaction.guildId, session.lastQuestionKey);
+                }
+                activeQuizSessions.set(interaction.guildId, session);
+              } catch {
+                await interaction.editReply({
+                  embeds: [
+                    statusEmbed({
+                      title: "Quiz",
+                      description:
+                        "Could not start quiz question generation. Try again in a few seconds.",
+                      tone: "error",
+                    }),
+                  ],
+                });
+                return;
+              }
+            } else {
             await interaction.editReply({
               embeds: [
                 statusEmbed({
@@ -1830,6 +1908,7 @@ export function registerInteractionCreateHandler({
               ],
             });
             return;
+            }
           }
 
           await interaction.editReply({

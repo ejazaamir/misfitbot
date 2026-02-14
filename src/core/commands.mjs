@@ -205,6 +205,11 @@ export function getCommands({ ApplicationCommandType }) {
         },
         {
           type: 1,
+          name: "clearleaderboard",
+          description: "Clear quiz leaderboard points for this server (admin/owner).",
+        },
+        {
+          type: 1,
           name: "stop",
           description: "Stop the active quiz (admin/owner/starter).",
         },
@@ -707,6 +712,7 @@ export function getHelpText() {
     "• `!hint` in quiz channel for a hint",
     "• `/quiz leaderboard [limit]`",
     "• `/quiz skip`",
+    "• `/quiz clearleaderboard`",
     "• `/quiz stop`",
     "• `/mbti start` / `/mbti result` / `/mbti reset [user]`",
     "• Beautify styles: box, double_box, banner, wave, glitch, spaced, tinycaps, bubble, leet, shadow, matrix, staircase, framed_quote, divider, code",
