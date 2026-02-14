@@ -1810,6 +1810,7 @@ export function registerInteractionCreateHandler({
           let failed = 0;
           let processed = 0;
           let lastProgressAt = Date.now();
+          const seedAttemptsPerQuestion = 4;
 
           const renderProgress = () => {
             return [
@@ -1837,31 +1838,45 @@ export function registerInteractionCreateHandler({
             );
 
             for (let i = 0; i < count; i += 1) {
-              try {
-                const generated = await generateUniqueQuizQuestion({
-                  genre: combo.genre,
-                  difficulty: combo.difficulty,
-                  recentQuestionKeys: Array.from(existing),
-                  maxTries: 7,
-                });
-                const saved = insertQuizQuestion({
-                  genre: combo.genre,
-                  difficulty: combo.difficulty,
-                  question: generated.question,
-                  options: generated.options,
-                  correctIndex: generated.correctIndex,
-                  explanation: generated.explanation,
-                  createdBy: interaction.user.id,
-                });
-                if (saved.inserted) {
-                  inserted += 1;
-                  existing.add(saved.questionKey);
-                } else {
-                  skipped += 1;
+              let completed = false;
+              let duplicateOnly = false;
+
+              for (let attempt = 0; attempt < seedAttemptsPerQuestion; attempt += 1) {
+                try {
+                  const generated = await generateUniqueQuizQuestion({
+                    genre: combo.genre,
+                    difficulty: combo.difficulty,
+                    recentQuestionKeys: Array.from(existing),
+                    maxTries: 7,
+                  });
+                  const saved = insertQuizQuestion({
+                    genre: combo.genre,
+                    difficulty: combo.difficulty,
+                    question: generated.question,
+                    options: generated.options,
+                    correctIndex: generated.correctIndex,
+                    explanation: generated.explanation,
+                    createdBy: interaction.user.id,
+                  });
+                  if (saved.inserted) {
+                    inserted += 1;
+                    existing.add(saved.questionKey);
+                    completed = true;
+                    break;
+                  }
+
+                  duplicateOnly = true;
+                } catch {
+                  // retry this target slot; only count as failed if all retries fail
                 }
-              } catch {
-                failed += 1;
-              } finally {
+              }
+
+              if (!completed) {
+                if (duplicateOnly) skipped += 1;
+                else failed += 1;
+              }
+
+              {
                 processed += 1;
 
                 const shouldUpdate =
