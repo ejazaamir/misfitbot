@@ -115,6 +115,7 @@ export function registerInteractionCreateHandler({
     medium: 2,
     hard: 3,
   };
+  const QUIZ_DIFFICULTIES = ["easy", "medium", "hard"];
 
   function sanitizeModelJson(raw) {
     const text = String(raw || "").trim();
@@ -255,6 +256,129 @@ export function registerInteractionCreateHandler({
     return fallback || (await generateQuizQuestion({ genre, difficulty }));
   }
 
+  function insertQuizQuestion({
+    genre,
+    difficulty,
+    question,
+    options,
+    correctIndex,
+    explanation,
+    createdBy,
+  }) {
+    const questionKey = normalizeQuestionKey(question);
+    const result = db
+      .prepare(
+        `INSERT OR IGNORE INTO quiz_questions
+         (genre, difficulty, question, question_key, options_json, correct_index, explanation, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))`
+      )
+      .run(
+        genre,
+        difficulty,
+        question.slice(0, 1200),
+        questionKey,
+        JSON.stringify(options),
+        correctIndex,
+        String(explanation || "").slice(0, 180),
+        createdBy || ""
+      );
+    return { inserted: result.changes > 0, questionKey };
+  }
+
+  function getQuizQuestionCounts() {
+    return db
+      .prepare(
+        `SELECT genre, difficulty, COUNT(*) AS count
+         FROM quiz_questions
+         GROUP BY genre, difficulty
+         ORDER BY genre, difficulty`
+      )
+      .all();
+  }
+
+  function getQuizQuestionKeys(genre, difficulty) {
+    const rows = db
+      .prepare(
+        `SELECT question_key
+         FROM quiz_questions
+         WHERE genre = ? AND difficulty = ?`
+      )
+      .all(genre, difficulty);
+    return rows.map((r) => String(r.question_key || "")).filter(Boolean);
+  }
+
+  function getStoredQuizQuestion(session) {
+    const rows = db
+      .prepare(
+        `SELECT id, question, question_key, options_json, correct_index, explanation
+         FROM quiz_questions
+         WHERE genre = ? AND difficulty = ?
+         ORDER BY RANDOM()
+         LIMIT 200`
+      )
+      .all(session.genre, session.difficulty);
+
+    for (const row of rows) {
+      const id = Number(row.id);
+      if (session.usedQuestionIds.has(id)) continue;
+      const key = String(row.question_key || "");
+      if (session.recentQuestionKeys.includes(key)) continue;
+
+      let options = [];
+      try {
+        options = JSON.parse(row.options_json || "[]");
+      } catch {
+        options = [];
+      }
+      if (!Array.isArray(options) || options.length !== 4) continue;
+
+      const correctIndex = Number(row.correct_index);
+      if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3) {
+        continue;
+      }
+
+      return {
+        id,
+        question: String(row.question || "").slice(0, 1200),
+        questionKey: key || normalizeQuestionKey(row.question || ""),
+        options: options.map((v) => String(v || "").slice(0, 90)),
+        correctIndex,
+        explanation: String(row.explanation || "").slice(0, 180),
+      };
+    }
+
+    return null;
+  }
+
+  async function getNextQuizPayload(session) {
+    const stored = getStoredQuizQuestion(session);
+    if (stored) return stored;
+
+    const generated = await generateUniqueQuizQuestion({
+      genre: session.genre,
+      difficulty: session.difficulty,
+      recentQuestionKeys: session.recentQuestionKeys,
+    });
+    const saved = insertQuizQuestion({
+      genre: session.genre,
+      difficulty: session.difficulty,
+      question: generated.question,
+      options: generated.options,
+      correctIndex: generated.correctIndex,
+      explanation: generated.explanation,
+      createdBy: session.startedBy,
+    });
+
+    return {
+      id: null,
+      question: generated.question,
+      questionKey: saved.questionKey,
+      options: generated.options,
+      correctIndex: generated.correctIndex,
+      explanation: generated.explanation,
+    };
+  }
+
   function recordQuizAttempt({ guildId, userId, pointsAwarded }) {
     const points = Math.max(0, Number(pointsAwarded) || 0);
     const correctDelta = points > 0 ? 1 : 0;
@@ -341,21 +465,20 @@ export function registerInteractionCreateHandler({
   async function nextQuizQuestion(session, introText = "") {
     if (!session || session.closed) return;
 
-    const generated = await generateUniqueQuizQuestion({
-      genre: session.genre,
-      difficulty: session.difficulty,
-      recentQuestionKeys: session.recentQuestionKeys,
-    });
-    const key = normalizeQuestionKey(generated.question);
+    const next = await getNextQuizPayload(session);
+    const key = next.questionKey || normalizeQuestionKey(next.question);
     session.recentQuestionKeys.push(key);
     if (session.recentQuestionKeys.length > 25) {
       session.recentQuestionKeys = session.recentQuestionKeys.slice(-25);
     }
+    if (Number.isInteger(next.id)) {
+      session.usedQuestionIds.add(next.id);
+    }
 
-    session.question = generated.question;
-    session.options = generated.options;
-    session.correctIndex = generated.correctIndex;
-    session.explanation = generated.explanation;
+    session.question = next.question;
+    session.options = next.options;
+    session.correctIndex = next.correctIndex;
+    session.explanation = next.explanation;
     session.questionNumber += 1;
     session.resolving = false;
     session.endsAt = Math.floor(Date.now() / 1000) + session.secondsPerQuestion;
@@ -1593,6 +1716,144 @@ export function registerInteractionCreateHandler({
           return;
         }
 
+        if (sub === "inventory") {
+          await safeDefer(interaction, { ephemeral: true });
+          const rows = getQuizQuestionCounts();
+          if (rows.length === 0) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Quiz Inventory",
+                  description: "No stored quiz questions yet. Use `/quiz seed`.",
+                  tone: "info",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const lines = rows.map((r) => {
+            const genre = QUIZ_GENRE_LABELS[r.genre] || r.genre;
+            return `${genre} | ${String(r.difficulty)}: **${r.count}**`;
+          });
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Quiz Inventory",
+                description: lines.join("\n").slice(0, 3900),
+                tone: "info",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "seed") {
+          const isOwner = interaction.user.id === OWNER_ID;
+          if (!isOwner) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Permission Denied",
+                  description: "Only Snooty can seed quiz questions.",
+                  tone: "error",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          await safeDefer(interaction, { ephemeral: true });
+
+          const genreArg = interaction.options.getString("genre", true);
+          const difficultyArg = interaction.options.getString("difficulty", true);
+          let count = interaction.options.getInteger("count", true);
+          if (count < 1) count = 1;
+          if (count > 20) count = 20;
+
+          const genres =
+            genreArg === "__all" ? Object.keys(QUIZ_GENRE_LABELS) : [genreArg];
+          const difficulties =
+            difficultyArg === "__all" ? QUIZ_DIFFICULTIES : [difficultyArg];
+
+          const combos = [];
+          for (const g of genres) {
+            for (const d of difficulties) combos.push({ genre: g, difficulty: d });
+          }
+
+          const totalTarget = combos.length * count;
+          if (totalTarget > 120) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Seed Too Large",
+                  description:
+                    `Requested ${totalTarget} questions. Max per run is 120. ` +
+                    "Reduce count or avoid selecting all genres+difficulties at once.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          let inserted = 0;
+          let skipped = 0;
+          let failed = 0;
+
+          for (const combo of combos) {
+            const existing = new Set(
+              getQuizQuestionKeys(combo.genre, combo.difficulty)
+            );
+
+            for (let i = 0; i < count; i += 1) {
+              try {
+                const generated = await generateUniqueQuizQuestion({
+                  genre: combo.genre,
+                  difficulty: combo.difficulty,
+                  recentQuestionKeys: Array.from(existing),
+                  maxTries: 7,
+                });
+                const saved = insertQuizQuestion({
+                  genre: combo.genre,
+                  difficulty: combo.difficulty,
+                  question: generated.question,
+                  options: generated.options,
+                  correctIndex: generated.correctIndex,
+                  explanation: generated.explanation,
+                  createdBy: interaction.user.id,
+                });
+                if (saved.inserted) {
+                  inserted += 1;
+                  existing.add(saved.questionKey);
+                } else {
+                  skipped += 1;
+                }
+              } catch {
+                failed += 1;
+              }
+            }
+          }
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Quiz Seeding Complete",
+                description: [
+                  `Requested: ${totalTarget}`,
+                  `Inserted: ${inserted}`,
+                  `Skipped duplicates: ${skipped}`,
+                  `Failed: ${failed}`,
+                ].join("\n"),
+                tone: "success",
+              }),
+            ],
+          });
+          return;
+        }
+
         if (sub === "stop") {
           const session = activeQuizSessions.get(interaction.channelId);
           if (!session || session.closed) {
@@ -1667,16 +1928,10 @@ export function registerInteractionCreateHandler({
           if (seconds > 180) seconds = 180;
 
           const points = QUIZ_POINTS_BY_DIFFICULTY[difficulty] || 1;
-          const generated = await generateUniqueQuizQuestion({
-            genre,
-            difficulty,
-            recentQuestionKeys: [],
-          });
           const endsAt = Math.floor(Date.now() / 1000) + seconds;
           const sessionId = `${Date.now().toString(36)}${Math.random()
             .toString(36)
             .slice(2, 7)}`;
-          const firstQuestionKey = normalizeQuestionKey(generated.question);
 
           const session = {
             id: sessionId,
@@ -1688,11 +1943,12 @@ export function registerInteractionCreateHandler({
             difficulty,
             secondsPerQuestion: seconds,
             points,
-            question: generated.question,
-            options: generated.options,
-            correctIndex: generated.correctIndex,
-            explanation: generated.explanation,
-            recentQuestionKeys: [firstQuestionKey],
+            question: "",
+            options: ["", "", "", ""],
+            correctIndex: 0,
+            explanation: "",
+            recentQuestionKeys: [],
+            usedQuestionIds: new Set(),
             endsAt,
             questionNumber: 1,
             totalQuestions: 10,
@@ -1700,6 +1956,15 @@ export function registerInteractionCreateHandler({
             closed: false,
             timeoutHandle: null,
           };
+
+          const first = await getNextQuizPayload(session);
+          const firstKey = first.questionKey || normalizeQuestionKey(first.question);
+          session.question = first.question;
+          session.options = first.options;
+          session.correctIndex = first.correctIndex;
+          session.explanation = first.explanation;
+          session.recentQuestionKeys = [firstKey];
+          if (Number.isInteger(first.id)) session.usedQuestionIds.add(first.id);
 
           activeQuizSessions.set(interaction.channelId, session);
 
