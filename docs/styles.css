@@ -119,6 +119,7 @@ h2 {
   padding: 20px;
   backdrop-filter: blur(8px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  overflow-x: clip;
 }
 
 .card h2 {
@@ -187,9 +188,10 @@ table {
   border-collapse: collapse;
   border: 1px solid rgba(131, 121, 255, 0.34);
   border-radius: 12px;
-  overflow: hidden;
+  overflow: auto;
   display: block;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   background: rgba(9, 8, 24, 0.72);
 }
 
@@ -270,6 +272,13 @@ li + li {
 }
 
 @media (max-width: 680px) {
+  .columns,
+  .columns--2,
+  .columns--3 {
+    grid-template-columns: 1fr !important;
+    gap: 10px;
+  }
+
   .hero {
     padding: 20px 12px 10px;
   }
@@ -298,6 +307,8 @@ li + li {
   }
 
   table {
+    display: block;
+    width: 100%;
     font-size: 0.92rem;
   }
 
