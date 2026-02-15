@@ -882,6 +882,7 @@ export function getHelpText() {
     "• `/profile set [note]` (opens form if note omitted)",
     "• `/profile show`",
     "• `/profile clear`",
+    "• `/profile peek user:@User` (owner)",
     "• `/profile setfor user:@User [note]` (owner, opens form if note omitted)",
     "• `/profile clearfor user:@User` (owner)",
     "",
