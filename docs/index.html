@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MisfitBot Command Guide</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Merriweather:wght@700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="hero__inner">
+        <p class="eyebrow">Midnight Misfits Utility Hub</p>
+        <h1>MisfitBot Command Handbook</h1>
+        <p class="subtitle">
+          Full list of slash commands, reply flows, and mention syntax.
+          Commands marked with <span class="badge badge--admin">ADMIN only</span>
+          require elevated permissions in this server.
+        </p>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="card">
+        <h2>Quick Permission Legend</h2>
+        <div class="legend">
+          <span class="badge badge--everyone">Everyone</span>
+          <span class="badge badge--admin">ADMIN only</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>How To Use</h2>
+        <div class="columns columns--3">
+          <article>
+            <h3>Slash Commands</h3>
+            <p>Type <code>/</code> in chat, choose a command, fill required options, submit.</p>
+          </article>
+          <article>
+            <h3>Reply Workflows</h3>
+            <p>Reply to a specific message first, then use the matching command or mention trigger.</p>
+          </article>
+          <article>
+            <h3>Right Click Apps</h3>
+            <p>Right click a message, open <strong>Apps</strong>, run Misfit context actions instantly.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Core AI Features</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th>Syntax</th>
+              <th>Example</th>
+              <th>Access</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Ask anything</td>
+              <td><code>/ask prompt:&lt;text&gt; [message:&lt;link&gt;]</code></td>
+              <td><code>/ask prompt:Give 3 startup ideas for students</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+            <tr>
+              <td>Tag-based chat</td>
+              <td><code>@MisfitBot &lt;question&gt;</code></td>
+              <td><code>@MisfitBot explain hashmaps simply</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+            <tr>
+              <td>Summarize message</td>
+              <td><code>/summarize [message:&lt;link&gt;]</code> or Apps: <code>Misfit: Summarize</code></td>
+              <td><code>/summarize message:https://discord.com/channels/...</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+            <tr>
+              <td>Explain message</td>
+              <td><code>/explain [message:&lt;link&gt;]</code></td>
+              <td><code>/explain</code> after replying to a message</td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+            <tr>
+              <td>Analyze image</td>
+              <td><code>/analyzeimage [message:&lt;link&gt;] [prompt:&lt;text&gt;]</code> or Apps: <code>Misfit: Analyze Image</code></td>
+              <td><code>/analyzeimage prompt:What details are in this image?</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+            <tr>
+              <td>Transcribe audio</td>
+              <td><code>/transcribe [message:&lt;link&gt;] [explain:true]</code> or Apps: <code>Misfit: Transcribe Voice</code></td>
+              <td><code>/transcribe explain:true</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>Media + Styling</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th>Syntax</th>
+              <th>Example</th>
+              <th>Access</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Generate image</td>
+              <td><code>/imagine prompt:&lt;text&gt;</code></td>
+              <td><code>/imagine prompt:cyberpunk owl in rain</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+            <tr>
+              <td>Text to voice note</td>
+              <td><code>/voicenote text:&lt;text&gt; [voice]</code></td>
+              <td><code>/voicenote text:Meeting starts in 10 minutes voice:nova</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+            <tr>
+              <td>Voice from replied message</td>
+              <td>Reply, then mention: <code>@MisfitBot voicenote</code> or <code>@MisfitBot voicenote nova</code></td>
+              <td>Reply to a message and send <code>@MisfitBot voicenote</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+            <tr>
+              <td>Beautify text</td>
+              <td><code>/beautify [text] [message:&lt;link&gt;] [style]</code> or Apps: <code>Misfit: Beautify Text</code></td>
+              <td><code>/beautify text:hello style:double_box</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="note">
+          Beautify styles: <code>box</code>, <code>double_box</code>, <code>banner</code>, <code>wave</code>, <code>glitch</code>, <code>spaced</code>, <code>tinycaps</code>, <code>bubble</code>, <code>leet</code>, <code>shadow</code>, <code>matrix</code>, <code>staircase</code>, <code>framed_quote</code>, <code>divider</code>, <code>code</code>.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>Reminders + Timezone</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th>Syntax</th>
+              <th>Example</th>
+              <th>Access</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Set timezone</td>
+              <td><code>/timezone set city:&lt;city or IANA timezone&gt;</code></td>
+              <td><code>/timezone set city:Singapore</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+            <tr>
+              <td>Show/clear timezone</td>
+              <td><code>/timezone show</code>, <code>/timezone clear</code></td>
+              <td><code>/timezone show</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+            <tr>
+              <td>Add reminder (global time parser)</td>
+              <td><code>/reminder add when:&lt;time&gt; message:&lt;text&gt; [every] [unit]</code></td>
+              <td><code>/reminder add when:1h30m message:Drink water every:2 unit:hours</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+            <tr>
+              <td>Add reminder (local HH:mm)</td>
+              <td><code>/reminder addlocal time:HH:mm message:&lt;text&gt; [every] [unit]</code></td>
+              <td><code>/reminder addlocal time:18:30 message:Daily check-in every:1 unit:days</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+            <tr>
+              <td>Manage reminders</td>
+              <td><code>/reminder list</code>, <code>/reminder remove id:&lt;id&gt;</code></td>
+              <td><code>/reminder remove id:12</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+            <tr>
+              <td>Mention shortcut</td>
+              <td><code>@MisfitBot remind me in 10m to stretch every 1h</code></td>
+              <td><code>@MisfitBot remind me in 45m to submit assignment</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>Quiz + MBTI + Profiles</h2>
+        <div class="columns columns--2">
+          <article>
+            <h3>Quiz</h3>
+            <ul>
+              <li><code>/quiz leaderboard [limit]</code> - everyone</li>
+              <li><code>/quiz start</code>, <code>/quiz skip</code>, <code>/quiz stop</code>, <code>/quiz clearleaderboard</code> - <span class="badge badge--admin">ADMIN only</span></li>
+              <li><code>!hint</code> in quiz channel for hint</li>
+            </ul>
+          </article>
+          <article>
+            <h3>MBTI + Profiles</h3>
+            <ul>
+              <li><code>/mbti start</code>, <code>/mbti result</code> - everyone</li>
+              <li><code>/mbti reset user:@User</code> - <span class="badge badge--admin">ADMIN only</span></li>
+              <li><code>/profile set|show|clear</code> - everyone</li>
+              <li><code>/profile peek|setfor|clearfor</code> - <span class="badge badge--admin">ADMIN only</span></li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Server Management Commands</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th>Syntax</th>
+              <th>Example</th>
+              <th>Access</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Preset message library</td>
+              <td><code>/preset add|send|list|remove</code></td>
+              <td><code>/preset add title:rules message:Please read #rules.</code></td>
+              <td><span class="badge badge--admin">ADMIN only</span></td>
+            </tr>
+            <tr>
+              <td>Schedule messages</td>
+              <td><code>/schedule addtext|addembed|addfrom|list|remove|pause|resume</code></td>
+              <td><code>/schedule addtext channel:#announcements when:1d2h message:Event starts soon</code></td>
+              <td><span class="badge badge--admin">ADMIN only</span></td>
+            </tr>
+            <tr>
+              <td>Purge + auto purge</td>
+              <td><code>/purge media|nonadmin|all|autopurge_set|autopurge_list|autopurge_remove</code></td>
+              <td><code>/purge autopurge_set channel:#spam every:5 unit:minutes mode:all scan_limit:200</code></td>
+              <td><span class="badge badge--admin">ADMIN only</span></td>
+            </tr>
+            <tr>
+              <td>Welcome system</td>
+              <td><code>/welcome set|show|preview|clear</code></td>
+              <td><code>/welcome set channel:#welcome message:Welcome {user} to {guild}</code></td>
+              <td><span class="badge badge--admin">ADMIN only</span></td>
+            </tr>
+            <tr>
+              <td>Bot behavior mode</td>
+              <td><code>/mode set name:&lt;sassy|chill|serious|hype|rude|ultraroast&gt;</code>, <code>/mode show</code></td>
+              <td><code>/mode set name:serious</code></td>
+              <td><span class="badge badge--admin">ADMIN only</span></td>
+            </tr>
+            <tr>
+              <td>Owner memory controls</td>
+              <td><code>@MisfitBot mem set|show|forget @User ...</code></td>
+              <td><code>@MisfitBot mem set @User likes concise answers</code></td>
+              <td><span class="badge badge--admin">ADMIN only</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>Time Format Cheatsheet</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Format</th>
+              <th>Example</th>
+              <th>Used In</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>ISO UTC</td>
+              <td><code>2026-02-14T21:30:00Z</code></td>
+              <td>Schedule and Reminder <code>when</code></td>
+            </tr>
+            <tr>
+              <td>Unix seconds</td>
+              <td><code>1760542200</code></td>
+              <td>Schedule and Reminder <code>when</code></td>
+            </tr>
+            <tr>
+              <td>Relative tokens</td>
+              <td><code>1d2h30m</code>, <code>45m</code>, <code>30s</code></td>
+              <td>Schedule and Reminder <code>when</code></td>
+            </tr>
+            <tr>
+              <td>Slash format</td>
+              <td><code>01/02/30</code> (dd/hh/mm), <code>02/45</code> (hh/mm)</td>
+              <td>Schedule and Reminder <code>when</code></td>
+            </tr>
+            <tr>
+              <td>Local fixed time</td>
+              <td><code>18:30</code></td>
+              <td><code>/reminder addlocal</code> after <code>/timezone set</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>Enable This As GitHub Website</h2>
+        <ol>
+          <li>Push this repo to GitHub.</li>
+          <li>Open repository <strong>Settings</strong> -> <strong>Pages</strong>.</li>
+          <li>Under Build and deployment, set Source to <strong>Deploy from a branch</strong>.</li>
+          <li>Choose branch <strong>main</strong> and folder <strong>/docs</strong>.</li>
+          <li>Save. GitHub will publish your site in about 1-2 minutes.</li>
+        </ol>
+      </section>
+    </main>
+  </body>
+</html>
