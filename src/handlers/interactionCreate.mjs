@@ -95,6 +95,9 @@ export function registerInteractionCreateHandler({
     0,
     Math.min(100, Number(process.env.QUIZ_OPEN_ANSWER_PERCENT || 35) || 35)
   );
+  const BOT_GUIDE_URL = String(
+    process.env.BOT_GUIDE_URL || "https://deathbysnooty.github.io/misfitbot/"
+  ).trim();
 
   function cleanupPending(map, maxAgeMs = 20 * 60 * 1000) {
     const now = Date.now();
@@ -1823,10 +1826,31 @@ export function registerInteractionCreateHandler({
           description: helpText,
           tone: "info",
         });
+        const helpComponents = [];
+        try {
+          const u = new URL(BOT_GUIDE_URL);
+          if (u.protocol === "https:" || u.protocol === "http:") {
+            helpComponents.push(
+              new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                  .setStyle(ButtonStyle.Link)
+                  .setURL(BOT_GUIDE_URL)
+                  .setLabel("Bot Guide")
+              )
+            );
+          }
+        } catch {}
         if (interaction.deferred || interaction.replied) {
-          await interaction.editReply({ embeds: [embed] });
+          await interaction.editReply({
+            embeds: [embed],
+            components: helpComponents,
+          });
         } else {
-          await interaction.reply({ embeds: [embed], ephemeral: true });
+          await interaction.reply({
+            embeds: [embed],
+            components: helpComponents,
+            ephemeral: true,
+          });
         }
         return;
       }
