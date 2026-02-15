@@ -13,6 +13,7 @@
   --admin: #ff7a8a;
   --glow-cyan: 0 0 18px rgba(87, 236, 255, 0.45);
   --glow-pink: 0 0 18px rgba(255, 95, 207, 0.4);
+  --container: 1120px;
 }
 
 * {
@@ -47,7 +48,7 @@ h2 {
 }
 
 .hero__inner {
-  max-width: 1100px;
+  max-width: var(--container);
   margin: 0 auto;
   background: linear-gradient(145deg, rgba(14, 16, 52, 0.88), rgba(12, 9, 33, 0.92));
   border: 1px solid rgba(151, 137, 255, 0.32);
@@ -77,7 +78,8 @@ h2 {
 .hero__banner img {
   display: block;
   width: 100%;
-  max-height: 430px;
+  max-height: 420px;
+  aspect-ratio: 3 / 2;
   object-fit: cover;
 }
 
@@ -103,7 +105,7 @@ h2 {
 }
 
 .layout {
-  max-width: 1100px;
+  max-width: var(--container);
   margin: 0 auto;
   padding: 8px 20px 42px;
   display: grid;
@@ -128,6 +130,7 @@ h2 {
 .columns {
   display: grid;
   gap: 14px;
+  align-items: stretch;
 }
 
 .columns--3 {
@@ -143,6 +146,7 @@ h2 {
   border: 1px solid rgba(131, 122, 255, 0.34);
   border-radius: 12px;
   padding: 14px;
+  height: 100%;
 }
 
 .columns h3 {
@@ -200,7 +204,7 @@ td {
   border-bottom: 1px solid rgba(131, 121, 255, 0.23);
   vertical-align: top;
   text-align: left;
-  min-width: 140px;
+  min-width: 120px;
 }
 
 tbody tr:nth-child(even) {
@@ -232,7 +236,7 @@ li + li {
 }
 
 .site-footer {
-  max-width: 1100px;
+  max-width: var(--container);
   margin: 0 auto 44px;
   padding: 18px 20px;
   text-align: center;
@@ -256,5 +260,61 @@ li + li {
 
   .hero__banner img {
     max-height: 260px;
+    aspect-ratio: 16 / 10;
+  }
+
+  th,
+  td {
+    min-width: 160px;
+  }
+}
+
+@media (max-width: 680px) {
+  .hero {
+    padding: 20px 12px 10px;
+  }
+
+  .layout {
+    padding: 8px 12px 28px;
+    gap: 12px;
+  }
+
+  .card {
+    padding: 14px;
+    border-radius: 14px;
+  }
+
+  .card h2 {
+    font-size: 1.2rem;
+    margin-bottom: 10px;
+  }
+
+  .hero h1 {
+    font-size: clamp(1.45rem, 7vw, 2rem);
+  }
+
+  .subtitle {
+    font-size: 0.94rem;
+  }
+
+  table {
+    font-size: 0.92rem;
+  }
+
+  th,
+  td {
+    padding: 9px 10px;
+    min-width: 190px;
+  }
+
+  code {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .site-footer {
+    padding: 14px 12px;
+    margin-bottom: 28px;
+    font-size: 0.94rem;
   }
 }
