@@ -15,7 +15,108 @@ export function createAiService({
   extFromUrl,
   downloadToTemp,
 }) {
+  const TIMEZONE_ALIASES = new Map([
+    ["utc", "UTC"],
+    ["gmt", "UTC"],
+    ["singapore", "Asia/Singapore"],
+    ["sg", "Asia/Singapore"],
+    ["india", "Asia/Kolkata"],
+    ["ist", "Asia/Kolkata"],
+    ["dubai", "Asia/Dubai"],
+    ["uae", "Asia/Dubai"],
+    ["london", "Europe/London"],
+    ["uk", "Europe/London"],
+    ["paris", "Europe/Paris"],
+    ["berlin", "Europe/Berlin"],
+    ["tokyo", "Asia/Tokyo"],
+    ["japan", "Asia/Tokyo"],
+    ["seoul", "Asia/Seoul"],
+    ["sydney", "Australia/Sydney"],
+    ["new york", "America/New_York"],
+    ["nyc", "America/New_York"],
+    ["los angeles", "America/Los_Angeles"],
+    ["la", "America/Los_Angeles"],
+    ["chicago", "America/Chicago"],
+    ["toronto", "America/Toronto"],
+  ]);
+
+  function looksLikeTimeQuestion(input) {
+    const s = String(input || "").toLowerCase();
+    return (
+      /\bwhat(?:'s| is)?\s+the?\s*time\b/.test(s) ||
+      /\btime\s+is\s+it\b/.test(s) ||
+      /\bcurrent\s+time\b/.test(s) ||
+      /\btime\s+now\b/.test(s)
+    );
+  }
+
+  function findTimezoneFromText(input) {
+    const raw = String(input || "").trim();
+    if (!raw) return null;
+    const clean = raw
+      .toLowerCase()
+      .replace(/[?.,!]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const inMatch = clean.match(/\bin\s+([a-z/_ ]{2,40})$/i);
+    const candidate = (inMatch ? inMatch[1] : clean).trim();
+    if (!candidate) return null;
+
+    if (TIMEZONE_ALIASES.has(candidate)) {
+      return TIMEZONE_ALIASES.get(candidate);
+    }
+
+    const maybeIana = candidate
+      .split(" ")
+      .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+      .join("_")
+      .replace(/_/g, "/");
+
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: maybeIana }).format(new Date());
+      return maybeIana;
+    } catch {
+      return null;
+    }
+  }
+
+  function formatNowForTimeZone(timeZone) {
+    const now = new Date();
+    const text = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: true,
+      timeZoneName: "short",
+    }).format(now);
+    return { now, text };
+  }
+
+  function getLiveTimeReply(input) {
+    if (!looksLikeTimeQuestion(input)) return null;
+
+    const tz = findTimezoneFromText(input);
+    if (tz) {
+      const { text } = formatNowForTimeZone(tz);
+      return `Current time in **${tz}**: **${text}**.`;
+    }
+
+    const utc = formatNowForTimeZone("UTC").text;
+    return `Current time in **UTC**: **${utc}**. If you want another location, ask like: \`what time is it in Singapore?\``;
+  }
+
   async function makeChatReply({ userId, userText, referencedText, imageUrls }) {
+    const directTimeReply = getLiveTimeReply(userText);
+    if (directTimeReply && !referencedText && (!imageUrls || imageUrls.length === 0)) {
+      return directTimeReply;
+    }
+
     const askerMemory = getUserMemory(userId);
 
     const profileRow = getProfile(userId);
@@ -29,6 +130,9 @@ export function createAiService({
       ? `Message being replied to:\n\n${referencedText}\n\nUser request:\n${userText}`
       : userText;
     const botMode = getBotMode();
+    const now = new Date();
+    const nowUnix = Math.floor(now.getTime() / 1000);
+    const nowUtcIso = now.toISOString();
 
     const userMessage =
       imageUrls?.length > 0
@@ -65,6 +169,11 @@ Current mode: ${botMode}
 ${modePresets[botMode]}
 - Never use hate speech, slurs, or discriminatory jokes.
 - Never mention system messages, tokens, OpenAI, or that you're an AI.
+Time rules:
+- You DO have a trusted live clock in this prompt.
+- Current UTC time is ${nowUtcIso} (unix ${nowUnix}).
+- If asked for time/date, use this clock and convert timezone explicitly.
+- Never claim you cannot access real-time time.
           `.trim(),
         },
         userMessage,
