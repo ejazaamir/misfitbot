@@ -8,6 +8,7 @@ export function createSchedulerService({
   let schedulerTimer = null;
   let schedulerBusy = false;
   let autoPurgeBusy = false;
+  let reminderBusy = false;
 
   async function isMessageAuthorAdmin(msg, memberPermCache) {
     if (!msg?.guild || !msg?.author?.id) return false;
@@ -252,6 +253,70 @@ export function createSchedulerService({
     }
   }
 
+  async function processDueReminders() {
+    if (reminderBusy) return;
+    reminderBusy = true;
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const due = db
+        .prepare(
+          `SELECT id, user_id, guild_id, message, send_at, interval_seconds
+           FROM user_reminders
+           WHERE active = 1 AND send_at <= ?
+           ORDER BY send_at ASC
+           LIMIT 30`
+        )
+        .all(now);
+
+      for (const row of due) {
+        try {
+          const user = await client.users.fetch(row.user_id).catch(() => null);
+          if (!user) throw new Error("User not found.");
+
+          const content = String(row.message || "").trim().slice(0, 1800);
+          if (!content) throw new Error("Reminder message empty.");
+
+          await user.send(
+            [
+              "⏰ Reminder",
+              `Server: ${row.guild_id}`,
+              `Message: ${content}`,
+              `Scheduled for: <t:${Number(row.send_at)}:F>`,
+            ].join("\n")
+          );
+
+          const intervalSeconds = Math.max(0, Number(row.interval_seconds || 0));
+          if (intervalSeconds > 0) {
+            let next = Number(row.send_at) + intervalSeconds;
+            while (next <= now) next += intervalSeconds;
+            db.prepare(`
+              UPDATE user_reminders
+              SET send_at = ?, last_error = '', updated_at = strftime('%s','now')
+              WHERE id = ?
+            `).run(next, row.id);
+          } else {
+            db.prepare(`
+              UPDATE user_reminders
+              SET active = 0, last_error = '', updated_at = strftime('%s','now')
+              WHERE id = ?
+            `).run(row.id);
+          }
+        } catch (err) {
+          const errText = String(err?.message || err || "unknown error").slice(0, 240);
+          const retryAt = now + 300;
+          db.prepare(`
+            UPDATE user_reminders
+            SET send_at = ?, last_error = ?, updated_at = strftime('%s','now')
+            WHERE id = ?
+          `).run(retryAt, errText, row.id);
+          console.error(`Reminder send failed #${row.id}:`, err);
+        }
+      }
+    } finally {
+      reminderBusy = false;
+    }
+  }
+
   function startScheduler() {
     if (schedulerTimer) clearInterval(schedulerTimer);
     processDueScheduledMessages().catch((e) =>
@@ -260,12 +325,18 @@ export function createSchedulerService({
     processDueAutoPurgeRules().catch((e) =>
       console.error("Auto-purge startup tick failed:", e)
     );
+    processDueReminders().catch((e) =>
+      console.error("Reminder startup tick failed:", e)
+    );
     schedulerTimer = setInterval(() => {
       processDueScheduledMessages().catch((e) =>
         console.error("Scheduler tick failed:", e)
       );
       processDueAutoPurgeRules().catch((e) =>
         console.error("Auto-purge tick failed:", e)
+      );
+      processDueReminders().catch((e) =>
+        console.error("Reminder tick failed:", e)
       );
     }, schedulerPollMs);
     schedulerTimer.unref?.();

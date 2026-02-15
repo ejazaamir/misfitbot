@@ -49,6 +49,7 @@ export function registerInteractionCreateHandler({
   clampPurgeScanLimit,
   autoPurgeModes,
   formatWelcomeMessage,
+  formatIntervalLabel,
 }) {
   const EMBED_COLORS = {
     info: 0x5865f2,
@@ -3583,6 +3584,201 @@ export function registerInteractionCreateHandler({
                   result.changes > 0
                     ? `Removed \`${normalizePresetTitle(titleRaw)}\`.`
                     : `No preset found for \`${normalizePresetTitle(titleRaw)}\`.`,
+                tone: result.changes > 0 ? "success" : "warn",
+              }),
+            ],
+          });
+          return;
+        }
+
+        await interaction.editReply("That subcommand isn’t wired up 😌");
+        return;
+      }
+
+      if (interaction.commandName === "reminder") {
+        if (!interaction.guildId) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Reminder",
+                description: "This command only works in a server.",
+                tone: "warn",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        await safeDefer(interaction, { ephemeral: true });
+        const sub = interaction.options.getSubcommand();
+        const now = Math.floor(Date.now() / 1000);
+
+        if (sub === "add") {
+          const whenRaw = interaction.options.getString("when", true);
+          const sendAt = parseScheduleTimeToUnixSeconds(whenRaw);
+          if (!sendAt || sendAt <= now + 2) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Time",
+                  description:
+                    "Use a future time: ISO UTC, unix, `dd/hh/mm`, `hh/mm`, or token form like `1d2h30m`.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const message = interaction.options
+            .getString("message", true)
+            .trim()
+            .slice(0, 1800);
+          if (!message) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Message",
+                  description: "Reminder message cannot be empty.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          let intervalSeconds = 0;
+          const every = interaction.options.getInteger("every");
+          if (Number.isInteger(every) && every > 0) {
+            const unit = (interaction.options.getString("unit") || "minutes").toLowerCase();
+            const unitMap = {
+              seconds: 1,
+              minutes: 60,
+              hours: 3600,
+              days: 86400,
+            };
+            const mult = unitMap[unit] || 60;
+            intervalSeconds = every * mult;
+          }
+
+          if (intervalSeconds > 0 && intervalSeconds < 5) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Repeat",
+                  description: "Minimum repeat interval is 5 seconds.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+          if (intervalSeconds > 86400 * 30) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Repeat",
+                  description: "Maximum repeat interval is 30 days.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const result = db
+            .prepare(
+              `INSERT INTO user_reminders (
+                 user_id, guild_id, message, send_at, interval_seconds, active, last_error, created_at, updated_at
+               )
+               VALUES (?, ?, ?, ?, ?, 1, '', strftime('%s','now'), strftime('%s','now'))`
+            )
+            .run(
+              interaction.user.id,
+              interaction.guildId,
+              message,
+              sendAt,
+              intervalSeconds
+            );
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: `Reminder Created (#${result.lastInsertRowid})`,
+                description: [
+                  `When: <t:${sendAt}:F>`,
+                  `Repeat: ${formatIntervalLabel(intervalSeconds)}`,
+                  "Delivery: DM",
+                ].join("\n"),
+                tone: "success",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "list") {
+          const rows = db
+            .prepare(
+              `SELECT id, message, send_at, interval_seconds, active, last_error
+               FROM user_reminders
+               WHERE guild_id = ? AND user_id = ?
+               ORDER BY id DESC
+               LIMIT 30`
+            )
+            .all(interaction.guildId, interaction.user.id);
+
+          if (rows.length === 0) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Your Reminders",
+                  description: "No reminders found. Use `/reminder add`.",
+                  tone: "info",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const lines = rows.map((r) => {
+            const msg = String(r.message || "").replace(/\s+/g, " ").slice(0, 60);
+            const err = r.last_error ? ` | err: ${String(r.last_error).slice(0, 36)}` : "";
+            return `#${r.id} | <t:${r.send_at}:R> | ${formatIntervalLabel(
+              r.interval_seconds
+            )} | ${r.active ? "active" : "done/paused"} | "${msg}"${err}`;
+          });
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Your Reminders (latest 30)",
+                description: lines.join("\n").slice(0, 3800),
+                tone: "info",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "remove") {
+          const id = interaction.options.getInteger("id", true);
+          const result = db
+            .prepare(
+              `DELETE FROM user_reminders
+               WHERE id = ? AND guild_id = ? AND user_id = ?`
+            )
+            .run(id, interaction.guildId, interaction.user.id);
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: result.changes > 0 ? "Reminder Removed" : "Reminder Not Found",
+                description:
+                  result.changes > 0
+                    ? `Removed #${id}.`
+                    : `No reminder #${id} found for you.`,
                 tone: result.changes > 0 ? "success" : "warn",
               }),
             ],

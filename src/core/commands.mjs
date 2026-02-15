@@ -460,6 +460,67 @@ export function getCommands({ ApplicationCommandType }) {
       ],
     },
     {
+      name: "reminder",
+      description: "Set personal DM reminders (with optional repeat).",
+      options: [
+        {
+          type: 1,
+          name: "add",
+          description: "Create a reminder that DMs you.",
+          options: [
+            {
+              type: 3,
+              name: "when",
+              description: "When: ISO/unix or relative like dd/hh/mm, hh/mm, 1d2h30m",
+              required: true,
+            },
+            {
+              type: 3,
+              name: "message",
+              description: "Reminder text",
+              required: true,
+            },
+            {
+              type: 4,
+              name: "every",
+              description: "Repeat every N units (optional)",
+              required: false,
+            },
+            {
+              type: 3,
+              name: "unit",
+              description: "Repeat unit (optional, default minutes)",
+              required: false,
+              choices: [
+                { name: "seconds", value: "seconds" },
+                { name: "minutes", value: "minutes" },
+                { name: "hours", value: "hours" },
+                { name: "days", value: "days" },
+              ],
+            },
+          ],
+        },
+        {
+          type: 1,
+          name: "list",
+          description: "List your active reminders in this server.",
+        },
+        {
+          type: 1,
+          name: "remove",
+          description: "Delete one of your reminders by ID.",
+          options: [
+            {
+              type: 4,
+              name: "id",
+              description: "Reminder ID from /reminder list",
+              required: true,
+            },
+          ],
+        },
+      ],
+    },
+    {
       name: "purge",
       description: "Owner only: purge messages and configure auto-purge.",
       options: [
@@ -753,6 +814,7 @@ export function getHelpText() {
     "• `/mode set name:<sassy|chill|serious|hype|rude|ultraroast>` / `/mode show` (owner)",
     "• `/schedule addtext|addembed(form)|addfrom|list|remove|pause|resume` (owner)",
     "• `/preset add|send|list|remove` (admin only)",
+    "• `/reminder add|list|remove` (DM reminders for yourself)",
     "• `/purge media|nonadmin|all` and `/purge autopurge_set|autopurge_list|autopurge_remove` (owner)",
     "",
     "**Profiles (opt-in):**",
@@ -780,6 +842,7 @@ export function getHelpText() {
     "• `/quiz clearleaderboard`",
     "• `/quiz stop`",
     "• `/mbti start` / `/mbti result` / `/mbti reset [user]`",
+    "• Mention shortcut: `@MisfitBot remind me in 10m to stretch every 1h`",
     "• Beautify styles: box, double_box, banner, wave, glitch, spaced, tinycaps, bubble, leet, shadow, matrix, staircase, framed_quote, divider, code",
     "• `/schedule when:` ISO UTC (`2026-02-14T21:30:00Z`), unix, `dd/hh/mm` (`01/02/30`), `hh/mm`, or `1d2h30m`",
     "• Purge note: Discord only bulk-deletes messages newer than 14 days",

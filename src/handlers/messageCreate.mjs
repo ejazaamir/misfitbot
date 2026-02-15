@@ -10,6 +10,9 @@ export function registerMessageCreateHandler({
   extractImageUrlsFromMessage,
   extractAudioAttachmentsFromMessage,
   setReplyContext,
+  parseScheduleTimeToUnixSeconds,
+  parseIntervalToSeconds,
+  formatIntervalLabel,
 }) {
   const disabledReplyChannelIds = new Set(
     String(process.env.DISABLE_REPLY_CHANNEL_IDS || "")
@@ -115,6 +118,69 @@ export function registerMessageCreateHandler({
         const targetId = forgetMatch[1];
         clearUserMemory(targetId);
         await message.reply(`Memory wiped for <@${targetId}> 🧽`);
+        return;
+      }
+
+      const reminderMatch = userText.match(
+        /^remind\s+me\s+(.+?)\s+to\s+(.+?)(?:\s+every\s+(.+))?$/i
+      );
+      if (reminderMatch) {
+        let whenRaw = reminderMatch[1].trim();
+        const reminderMessage = reminderMatch[2].trim().slice(0, 1800);
+        const everyRaw = (reminderMatch[3] || "").trim();
+
+        whenRaw = whenRaw.replace(/^(in|at)\s+/i, "").trim();
+        const sendAt = parseScheduleTimeToUnixSeconds(whenRaw);
+        const now = Math.floor(Date.now() / 1000);
+        if (!sendAt || sendAt <= now + 2) {
+          await message.reply(
+            "I couldn’t parse that reminder time. Try `in 10m`, `01/02/30`, `1d2h`, unix, or ISO UTC."
+          );
+          return;
+        }
+        if (!reminderMessage) {
+          await message.reply("Reminder message cannot be empty.");
+          return;
+        }
+
+        let intervalSeconds = 0;
+        if (everyRaw) {
+          intervalSeconds = parseIntervalToSeconds(everyRaw);
+          if (intervalSeconds < 5) {
+            await message.reply(
+              "Repeat interval is too short. Use at least 5 seconds (e.g. `every 10m`)."
+            );
+            return;
+          }
+          if (intervalSeconds > 86400 * 30) {
+            await message.reply("Repeat interval max is 30 days.");
+            return;
+          }
+        }
+
+        const result = db
+          .prepare(
+            `INSERT INTO user_reminders (
+               user_id, guild_id, message, send_at, interval_seconds, active, last_error, created_at, updated_at
+             )
+             VALUES (?, ?, ?, ?, ?, 1, '', strftime('%s','now'), strftime('%s','now'))`
+          )
+          .run(
+            message.author.id,
+            message.guild?.id || "0",
+            reminderMessage,
+            sendAt,
+            intervalSeconds
+          );
+
+        await message.reply(
+          [
+            `⏰ Reminder set (#${result.lastInsertRowid})`,
+            `When: <t:${sendAt}:F>`,
+            `Repeat: ${formatIntervalLabel(intervalSeconds)}`,
+            "I will DM you when it triggers.",
+          ].join("\n")
+        );
         return;
       }
 

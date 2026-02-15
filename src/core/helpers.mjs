@@ -222,6 +222,43 @@ export function clampPurgeScanLimit(n, fallback = 100) {
   return Math.floor(v);
 }
 
+export function parseIntervalToSeconds(input) {
+  const raw = String(input || "").trim().toLowerCase();
+  if (!raw) return 0;
+
+  if (/^\d+$/.test(raw)) {
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  }
+
+  if (/^(\d+\s*[dhms]\s*)+$/.test(raw)) {
+    const re = /(\d+)\s*([dhms])/g;
+    let total = 0;
+    let match;
+    while ((match = re.exec(raw)) !== null) {
+      const n = Number(match[1]);
+      const u = match[2];
+      if (!Number.isFinite(n) || n <= 0) return 0;
+      if (u === "d") total += n * 86400;
+      if (u === "h") total += n * 3600;
+      if (u === "m") total += n * 60;
+      if (u === "s") total += n;
+    }
+    return total > 0 ? total : 0;
+  }
+
+  return 0;
+}
+
+export function formatIntervalLabel(seconds) {
+  const secs = Math.max(0, Number(seconds || 0));
+  if (!secs) return "one-time";
+  if (secs % 86400 === 0) return `every ${secs / 86400}d`;
+  if (secs % 3600 === 0) return `every ${secs / 3600}h`;
+  if (secs % 60 === 0) return `every ${secs / 60}m`;
+  return `every ${secs}s`;
+}
+
 export function formatWelcomeMessage(template, guildName, memberId, fallbackMessage) {
   return (template || fallbackMessage)
     .replaceAll("{user}", `<@${memberId}>`)

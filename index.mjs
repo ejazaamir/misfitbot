@@ -31,6 +31,8 @@ import {
   scheduleTimeLabel,
   clampPurgeScanLimit,
   formatWelcomeMessage,
+  parseIntervalToSeconds,
+  formatIntervalLabel,
 } from "./src/core/helpers.mjs";
 import { createDb } from "./src/core/db.mjs";
 import { createReplyContext } from "./src/core/replyContext.mjs";
@@ -131,6 +133,9 @@ registerMessageCreateHandler({
   extractImageUrlsFromMessage,
   extractAudioAttachmentsFromMessage,
   setReplyContext: replyContext.setReplyContext,
+  parseScheduleTimeToUnixSeconds,
+  parseIntervalToSeconds,
+  formatIntervalLabel,
 });
 
 registerInteractionCreateHandler({
@@ -172,6 +177,7 @@ registerInteractionCreateHandler({
   clampPurgeScanLimit,
   autoPurgeModes: AUTO_PURGE_MODES,
   formatWelcomeMessage,
+  formatIntervalLabel,
 });
 
 client.login(process.env.DISCORD_TOKEN);
