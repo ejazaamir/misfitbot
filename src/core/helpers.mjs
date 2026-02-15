@@ -259,6 +259,82 @@ export function formatIntervalLabel(seconds) {
   return `every ${secs}s`;
 }
 
+const TIMEZONE_ALIASES = new Map([
+  ["singapore", "Asia/Singapore"],
+  ["sg", "Asia/Singapore"],
+  ["india", "Asia/Kolkata"],
+  ["ist", "Asia/Kolkata"],
+  ["dubai", "Asia/Dubai"],
+  ["uae", "Asia/Dubai"],
+  ["london", "Europe/London"],
+  ["uk", "Europe/London"],
+  ["new york", "America/New_York"],
+  ["nyc", "America/New_York"],
+  ["los angeles", "America/Los_Angeles"],
+  ["la", "America/Los_Angeles"],
+  ["chicago", "America/Chicago"],
+  ["toronto", "America/Toronto"],
+  ["tokyo", "Asia/Tokyo"],
+  ["seoul", "Asia/Seoul"],
+  ["sydney", "Australia/Sydney"],
+  ["berlin", "Europe/Berlin"],
+  ["paris", "Europe/Paris"],
+  ["utc", "UTC"],
+  ["gmt", "UTC"],
+]);
+
+export function resolveTimeZoneInput(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
+  const key = raw.toLowerCase().replace(/\s+/g, " ");
+  if (TIMEZONE_ALIASES.has(key)) return TIMEZONE_ALIASES.get(key);
+
+  const iana = raw.includes("/")
+    ? raw
+    : raw
+        .split(/\s+/)
+        .map((p) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
+        .join("_")
+        .replace(/_/g, "/");
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: iana }).format(new Date());
+    return iana;
+  } catch {
+    return null;
+  }
+}
+
+export function parseLocalHHMMToNextUnixSeconds(input, timeZone) {
+  const tz = String(timeZone || "").trim();
+  if (!tz) return null;
+
+  const m = String(input || "")
+    .trim()
+    .match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!m) return null;
+  const targetHour = Number(m[1]);
+  const targetMinute = Number(m[2]);
+
+  const now = new Date();
+  const nowUnix = Math.floor(now.getTime() / 1000);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+
+  const hour = Number(parts.find((p) => p.type === "hour")?.value);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+
+  const current = hour * 60 + minute;
+  const target = targetHour * 60 + targetMinute;
+  let delta = target - current;
+  if (delta <= 0) delta += 24 * 60;
+  return nowUnix + delta * 60;
+}
+
 export function formatWelcomeMessage(template, guildName, memberId, fallbackMessage) {
   return (template || fallbackMessage)
     .replaceAll("{user}", `<@${memberId}>`)

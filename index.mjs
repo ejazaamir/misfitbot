@@ -33,6 +33,8 @@ import {
   formatWelcomeMessage,
   parseIntervalToSeconds,
   formatIntervalLabel,
+  resolveTimeZoneInput,
+  parseLocalHHMMToNextUnixSeconds,
 } from "./src/core/helpers.mjs";
 import { createDb } from "./src/core/db.mjs";
 import { createReplyContext } from "./src/core/replyContext.mjs";
@@ -178,6 +180,8 @@ registerInteractionCreateHandler({
   autoPurgeModes: AUTO_PURGE_MODES,
   formatWelcomeMessage,
   formatIntervalLabel,
+  resolveTimeZoneInput,
+  parseLocalHHMMToNextUnixSeconds,
 });
 
 client.login(process.env.DISCORD_TOKEN);

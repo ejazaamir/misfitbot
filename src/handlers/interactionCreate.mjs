@@ -50,6 +50,8 @@ export function registerInteractionCreateHandler({
   autoPurgeModes,
   formatWelcomeMessage,
   formatIntervalLabel,
+  resolveTimeZoneInput,
+  parseLocalHHMMToNextUnixSeconds,
 }) {
   const EMBED_COLORS = {
     info: 0x5865f2,
@@ -3718,6 +3720,127 @@ export function registerInteractionCreateHandler({
           return;
         }
 
+        if (sub === "addlocal") {
+          const tzRow = db
+            .prepare(`SELECT tz, city_label FROM user_timezones WHERE user_id = ?`)
+            .get(interaction.user.id);
+          if (!tzRow?.tz) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Timezone Required",
+                  description:
+                    "Set your city/timezone first with `/timezone set city:<city>`.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const timeRaw = interaction.options.getString("time", true);
+          const sendAt = parseLocalHHMMToNextUnixSeconds(timeRaw, tzRow.tz);
+          if (!sendAt || sendAt <= now + 2) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Local Time",
+                  description:
+                    "Use `HH:mm` in 24-hour format, like `09:30` or `18:45`.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const message = interaction.options
+            .getString("message", true)
+            .trim()
+            .slice(0, 1800);
+          if (!message) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Message",
+                  description: "Reminder message cannot be empty.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          let intervalSeconds = 0;
+          const every = interaction.options.getInteger("every");
+          if (Number.isInteger(every) && every > 0) {
+            const unit = (interaction.options.getString("unit") || "days").toLowerCase();
+            const unitMap = {
+              seconds: 1,
+              minutes: 60,
+              hours: 3600,
+              days: 86400,
+            };
+            intervalSeconds = every * (unitMap[unit] || 86400);
+          }
+          if (intervalSeconds > 0 && intervalSeconds < 5) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Repeat",
+                  description: "Minimum repeat interval is 5 seconds.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+          if (intervalSeconds > 86400 * 30) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Repeat",
+                  description: "Maximum repeat interval is 30 days.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const result = db
+            .prepare(
+              `INSERT INTO user_reminders (
+                 user_id, guild_id, message, send_at, interval_seconds, active, last_error, created_at, updated_at
+               )
+               VALUES (?, ?, ?, ?, ?, 1, '', strftime('%s','now'), strftime('%s','now'))`
+            )
+            .run(
+              interaction.user.id,
+              interaction.guildId,
+              message,
+              sendAt,
+              intervalSeconds
+            );
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: `Reminder Created (#${result.lastInsertRowid})`,
+                description: [
+                  `Timezone: ${tzRow.city_label || tzRow.tz} (${tzRow.tz})`,
+                  `Local time: ${timeRaw}`,
+                  `When: <t:${sendAt}:F>`,
+                  `Repeat: ${formatIntervalLabel(intervalSeconds)}`,
+                  "Delivery: DM",
+                ].join("\n"),
+                tone: "success",
+              }),
+            ],
+          });
+          return;
+        }
+
         if (sub === "list") {
           const rows = db
             .prepare(
@@ -3780,6 +3903,94 @@ export function registerInteractionCreateHandler({
                     ? `Removed #${id}.`
                     : `No reminder #${id} found for you.`,
                 tone: result.changes > 0 ? "success" : "warn",
+              }),
+            ],
+          });
+          return;
+        }
+
+        await interaction.editReply("That subcommand isn’t wired up 😌");
+        return;
+      }
+
+      if (interaction.commandName === "timezone") {
+        await safeDefer(interaction, { ephemeral: true });
+        const sub = interaction.options.getSubcommand();
+
+        if (sub === "set") {
+          const cityRaw = interaction.options.getString("city", true).trim();
+          const tz = resolveTimeZoneInput(cityRaw);
+          if (!tz) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Timezone Not Found",
+                  description:
+                    "Use a known city (like `Singapore`) or IANA timezone (`Asia/Singapore`).",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          db.prepare(
+            `INSERT INTO user_timezones (user_id, tz, city_label, updated_at)
+             VALUES (?, ?, ?, strftime('%s','now'))
+             ON CONFLICT(user_id) DO UPDATE SET
+               tz = excluded.tz,
+               city_label = excluded.city_label,
+               updated_at = strftime('%s','now')`
+          ).run(interaction.user.id, tz, cityRaw.slice(0, 120));
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Timezone Saved",
+                description: `Saved as **${cityRaw}** -> \`${tz}\`.`,
+                tone: "success",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "show") {
+          const row = db
+            .prepare(`SELECT tz, city_label FROM user_timezones WHERE user_id = ?`)
+            .get(interaction.user.id);
+          if (!row) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Timezone",
+                  description: "No timezone set. Use `/timezone set city:<city>`.",
+                  tone: "info",
+                }),
+              ],
+            });
+            return;
+          }
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Your Timezone",
+                description: `${row.city_label || row.tz} (\`${row.tz}\`)`,
+                tone: "info",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "clear") {
+          db.prepare(`DELETE FROM user_timezones WHERE user_id = ?`).run(interaction.user.id);
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Timezone Cleared",
+                description: "Your saved timezone has been removed.",
+                tone: "success",
               }),
             ],
           });

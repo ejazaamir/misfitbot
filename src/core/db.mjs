@@ -107,6 +107,15 @@ export function createDb({ dbPath, defaultBotMode }) {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS user_timezones (
+      user_id TEXT PRIMARY KEY,
+      tz TEXT NOT NULL,
+      city_label TEXT NOT NULL DEFAULT '',
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS auto_purge_rules (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       guild_id TEXT NOT NULL,

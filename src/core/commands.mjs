@@ -507,6 +507,43 @@ export function getCommands({ ApplicationCommandType }) {
         },
         {
           type: 1,
+          name: "addlocal",
+          description: "Create reminder using your saved timezone and HH:mm.",
+          options: [
+            {
+              type: 3,
+              name: "time",
+              description: "Local time in HH:mm (24h), e.g. 18:30",
+              required: true,
+            },
+            {
+              type: 3,
+              name: "message",
+              description: "Reminder text",
+              required: true,
+            },
+            {
+              type: 4,
+              name: "every",
+              description: "Repeat every N units (optional)",
+              required: false,
+            },
+            {
+              type: 3,
+              name: "unit",
+              description: "Repeat unit (optional, default days for addlocal)",
+              required: false,
+              choices: [
+                { name: "seconds", value: "seconds" },
+                { name: "minutes", value: "minutes" },
+                { name: "hours", value: "hours" },
+                { name: "days", value: "days" },
+              ],
+            },
+          ],
+        },
+        {
+          type: 1,
           name: "remove",
           description: "Delete one of your reminders by ID.",
           options: [
@@ -518,6 +555,27 @@ export function getCommands({ ApplicationCommandType }) {
             },
           ],
         },
+      ],
+    },
+    {
+      name: "timezone",
+      description: "Set/show your city or timezone for local-time reminders.",
+      options: [
+        {
+          type: 1,
+          name: "set",
+          description: "Set your city/timezone (e.g. Singapore or Asia/Singapore).",
+          options: [
+            {
+              type: 3,
+              name: "city",
+              description: "City or IANA timezone",
+              required: true,
+            },
+          ],
+        },
+        { type: 1, name: "show", description: "Show your saved timezone." },
+        { type: 1, name: "clear", description: "Clear your saved timezone." },
       ],
     },
     {
@@ -814,7 +872,8 @@ export function getHelpText() {
     "• `/mode set name:<sassy|chill|serious|hype|rude|ultraroast>` / `/mode show` (owner)",
     "• `/schedule addtext|addembed(form)|addfrom|list|remove|pause|resume` (owner)",
     "• `/preset add|send|list|remove` (admin only)",
-    "• `/reminder add|list|remove` (DM reminders for yourself)",
+    "• `/timezone set|show|clear` (city/timezone for local reminders)",
+    "• `/reminder add|addlocal|list|remove` (DM reminders for yourself)",
     "• `/purge media|nonadmin|all` and `/purge autopurge_set|autopurge_list|autopurge_remove` (owner)",
     "",
     "**Profiles (opt-in):**",
