@@ -601,19 +601,54 @@ export function registerInteractionCreateHandler({
     await targetChannel.send({ embeds: [embed] });
   }
 
-  function scheduleNextOpenQuizQuestion(session) {
+  function scheduleNextOpenQuizQuestion(session, delaySeconds = null) {
     if (!session || !session.active || session.scheduledNext) return;
     session.scheduledNext = true;
     if (session.nextQuestionTimeout) clearTimeout(session.nextQuestionTimeout);
+    const delayMs = Math.max(
+      1000,
+      (Number.isFinite(delaySeconds) ? delaySeconds : session.intervalSeconds) * 1000
+    );
 
     session.nextQuestionTimeout = setTimeout(async () => {
       try {
-        if (!session.active) return;
+        if (!session.active) {
+          session.scheduledNext = false;
+          return;
+        }
         await sendOpenQuizQuestion(session);
       } catch (err) {
+        session.scheduledNext = false;
         console.error("Open quiz next question failed:", err);
+        const targetChannel = await fetchQuizChannel(session);
+        if (targetChannel) {
+          await targetChannel
+            .send("⚠️ Couldn’t load the next quiz question. Retrying shortly...")
+            .catch(() => {});
+        }
+        if (session.active) scheduleNextOpenQuizQuestion(session, 8);
       }
-    }, session.intervalSeconds * 1000);
+    }, delayMs);
+  }
+
+  async function forceNextOpenQuizQuestion(session) {
+    if (!session || !session.active) return false;
+    if (session.nextQuestionTimeout) clearTimeout(session.nextQuestionTimeout);
+    session.scheduledNext = false;
+    try {
+      await sendOpenQuizQuestion(session);
+      return true;
+    } catch (err) {
+      console.error("Force next quiz question failed:", err);
+      const targetChannel = await fetchQuizChannel(session);
+      if (targetChannel) {
+        await targetChannel
+          .send("⚠️ Couldn’t load next question right now. Retrying shortly...")
+          .catch(() => {});
+      }
+      scheduleNextOpenQuizQuestion(session, 8);
+      return false;
+    }
   }
 
   async function stopOpenQuizSession(session, stoppedByUserId = "") {
@@ -2017,7 +2052,7 @@ export function registerInteractionCreateHandler({
             ],
             ephemeral: false,
           });
-          scheduleNextOpenQuizQuestion(session);
+          await forceNextOpenQuizQuestion(session);
           return;
         }
 
