@@ -1,5 +1,5 @@
 export function getCommands({ ApplicationCommandType }) {
-  return [
+  const commands = [
     { name: "help", description: "Show what MisfitBot can do.", options: [] },
     {
       name: "ask",
@@ -910,6 +910,30 @@ export function getCommands({ ApplicationCommandType }) {
     { name: "Misfit: Voice Note", type: ApplicationCommandType.Message },
     { name: "Misfit: Beautify Text", type: ApplicationCommandType.Message },
   ];
+
+  const dmEnabled = new Set([
+    "help",
+    "ask",
+    "imagine",
+    "summarize",
+    "explain",
+    "analyzeimage",
+    "transcribe",
+    "voicenote",
+    "beautify",
+  ]);
+
+  return commands.map((cmd) => {
+    const isDmCapable =
+      cmd.type === ApplicationCommandType.Message || dmEnabled.has(cmd.name);
+
+    return {
+      ...cmd,
+      integration_types: isDmCapable ? [0, 1] : [0], // guild install, user install
+      contexts: isDmCapable ? [0, 1, 2] : [0], // guild, bot dm, private channel
+      ...(cmd.type ? {} : { dm_permission: isDmCapable }),
+    };
+  });
 }
 
 export function getHelpText() {
