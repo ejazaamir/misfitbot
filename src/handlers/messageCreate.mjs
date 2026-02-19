@@ -107,6 +107,79 @@ export function registerMessageCreateHandler({
         return;
       }
 
+      const isDm = !message.guildId && Boolean(message.channel?.isDMBased?.());
+      if (isDm) {
+        let referencedText = "";
+        let repliedMsg = null;
+
+        if (message.reference?.messageId) {
+          try {
+            repliedMsg = await message.channel.messages.fetch(
+              message.reference.messageId
+            );
+            if (repliedMsg?.content) referencedText = repliedMsg.content.trim();
+          } catch {}
+        }
+
+        let imageUrls = extractImageUrlsFromMessage(message);
+        let audioAtts = extractAudioAttachmentsFromMessage(message);
+        if (repliedMsg) {
+          imageUrls = imageUrls.concat(extractImageUrlsFromMessage(repliedMsg));
+          audioAtts = audioAtts.concat(
+            extractAudioAttachmentsFromMessage(repliedMsg)
+          );
+        }
+        imageUrls = imageUrls.slice(0, 3);
+        audioAtts = audioAtts.slice(0, 1);
+
+        if (audioAtts.length > 0) {
+          await message.channel.sendTyping();
+          try {
+            const transcript = await ai.transcribeAudioAttachment(audioAtts[0]);
+            const explanation = await ai.makeChatReply({
+              userId: message.author.id,
+              userText: "Explain this transcript briefly and clearly.",
+              referencedText: transcript || "(empty transcript)",
+              imageUrls: [],
+            });
+
+            await message.reply(
+              `**Transcript:**\n${(transcript || "—").slice(
+                0,
+                1400
+              )}\n\n**Explanation:**\n${explanation}`.slice(0, 1900)
+            );
+          } catch (e) {
+            console.error("Transcribe (DM) failed:", e);
+            await message.reply("⚠️ I couldn’t transcribe that voice note 😭");
+          }
+          return;
+        }
+
+        const finalText =
+          message.content.trim().length > 0
+            ? message.content.trim()
+            : imageUrls.length > 0
+              ? "Analyze this image."
+              : "";
+        if (!finalText) return;
+
+        await message.channel.sendTyping();
+        try {
+          const reply = await ai.makeChatReply({
+            userId: message.author.id,
+            userText: finalText,
+            referencedText,
+            imageUrls,
+          });
+          await message.reply(reply.slice(0, 1900));
+        } catch (e) {
+          console.error("Chat (DM) failed:", e);
+          await message.reply("⚠️ Error generating a reply.");
+        }
+        return;
+      }
+
       if (!message.mentions.has(client.user)) return;
 
       const isOwner = message.author.id === OWNER_ID;

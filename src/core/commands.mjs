@@ -937,6 +937,11 @@ export function getHelpText() {
     "• `/timezone set|show|clear` (city/timezone for local reminders)",
     "• `/reminder add|addlocal|list|remove` (DM reminders for yourself)",
     "",
+    "**DM usage:**",
+    "• In DM, you can chat without tagging the bot.",
+    "• DM supports: ask/chat, imagine, voicenote, beautify, summarize/explain/analyzeimage/transcribe (with links/reply context).",
+    "• Server-management commands remain server-only.",
+    "",
     "**Profiles (opt-in):**",
     "• `/profile set [note]` (opens form if note omitted)",
     "• `/profile show`",
@@ -976,26 +981,19 @@ export function getHelpText() {
 
 export async function registerCommands(client, commands) {
   try {
+    // Global registration is required for DM command usage.
+    await client.application.commands.set(commands);
+    console.log("✅ Registered GLOBAL commands");
+
+    // Optional cleanup: clear old guild-scoped commands to avoid duplicates.
     const preferredGuildId = String(process.env.GUILD_ID || "").trim();
     const guildTargets = preferredGuildId
       ? [client.guilds.cache.get(preferredGuildId)].filter(Boolean)
       : [...client.guilds.cache.values()];
-
-    if (guildTargets.length === 0) {
-      console.warn(
-        "⚠️ No guild targets found for local command registration. Check GUILD_ID or bot guild cache."
-      );
-      return;
-    }
-
     for (const guild of guildTargets) {
-      await guild.commands.set(commands);
-      console.log(`✅ Registered GUILD commands (fast): ${guild.id}`);
+      await guild.commands.set([]);
+      console.log(`🧹 Cleared GUILD commands: ${guild.id}`);
     }
-
-    // Optional cleanup: clear global commands so only local/guild commands remain.
-    await client.application.commands.set([]);
-    console.log("🧹 Cleared GLOBAL commands (using local guild commands only)");
   } catch (err) {
     console.error("❌ Failed to register commands:", err);
   }
