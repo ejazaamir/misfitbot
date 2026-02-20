@@ -105,6 +105,12 @@
               <td><code>/transcribe explain:true</code></td>
               <td><span class="badge badge--everyone">Everyone</span></td>
             </tr>
+            <tr>
+              <td>Summarize channel</td>
+              <td><code>/summarizechannel count:&lt;1-100&gt;</code></td>
+              <td><code>/summarizechannel count:30</code></td>
+              <td><span class="badge badge--everyone">Everyone</span></td>
+            </tr>
           </tbody>
         </table>
       </section>
@@ -211,6 +217,7 @@
             <h3>Quiz</h3>
             <ul>
               <li><code>/quiz leaderboard [limit]</code> - everyone</li>
+              <li><code>/quiz start [category]</code> categories: mixed, history, politics, sports, harry_potter, game_of_thrones, lord_of_the_rings, movies, tv_show, celebrity_news, music</li>
               <li><code>/quiz start</code>, <code>/quiz skip</code>, <code>/quiz stop</code>, <code>/quiz clearleaderboard</code> - <span class="badge badge--admin">ADMIN only</span></li>
               <li><code>!hint</code> in quiz channel for hint</li>
             </ul>
@@ -255,6 +262,18 @@
               <td>Purge + auto purge</td>
               <td><code>/purge media|nonadmin|all|autopurge_set|autopurge_list|autopurge_remove</code></td>
               <td><code>/purge autopurge_set channel:#spam every:5 unit:minutes mode:all scan_limit:200</code></td>
+              <td><span class="badge badge--admin">ADMIN only</span></td>
+            </tr>
+            <tr>
+              <td>Per-message TTL auto-delete</td>
+              <td><code>/purge msgttl_set|msgttl_list|msgttl_remove</code></td>
+              <td><code>/purge msgttl_set channel:#spam every:5 unit:minutes</code></td>
+              <td><span class="badge badge--admin">ADMIN only</span></td>
+            </tr>
+            <tr>
+              <td>NSFW media guard</td>
+              <td><code>/nsfwguard set|list|remove</code></td>
+              <td><code>/nsfwguard set channel:#general</code></td>
               <td><span class="badge badge--admin">ADMIN only</span></td>
             </tr>
             <tr>
